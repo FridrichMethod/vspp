@@ -154,8 +154,11 @@ class SMIConverter:
                 deduplicated.append((smiles, title))
 
         self.smi_ttl = deduplicated
+        self.num = len(self.smi_ttl)
 
-        logging.info("SMILES and title are deduplicated.")
+        logging.info(
+            "SMILES and title are deduplicated. %d molecules are left.", self.num
+        )
 
     def sort(self) -> None:
         """Sort the molecules"""
@@ -186,7 +189,7 @@ class SMIConverter:
                 os.path.join(output_dir, os.path.splitext(self.file)[0] + "_0.smi"),
             )
         else:
-            with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+            with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2 + 1) as executor:
                 for i in range(0, self.num, batch_size):
                     executor.submit(
                         self._write_batch,
@@ -195,7 +198,7 @@ class SMIConverter:
                     )
 
             logging.info(
-                "The .smi files are written to %s",
+                "All .smi files are written to %s",
                 os.path.join(output_dir, os.path.splitext(self.file)[0] + "_*.smi"),
             )
 
