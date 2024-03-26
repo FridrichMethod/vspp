@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 
-from vspp._utils import gen_fp, calc_sim
+from ._utils import gen_fp, calc_sim
 
 
 def mols_graph(mols_csv: str) -> nx.Graph:

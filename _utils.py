@@ -1,7 +1,6 @@
 import os
 import gzip
-import multiprocessing as mp
-from typing import Iterator, Callable, Iterable, Literal
+from typing import Generator, Sequence, Callable, Unpack
 from warnings import warn
 
 import pandas as pd
@@ -34,17 +33,17 @@ DESC_NAMES: tuple[str, ...] = (
 DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
 
-def read_mols(file: str) -> Iterator[Chem.rdchem.Mol]:
+def read_mols(file: str) -> Generator[Chem.rdchem.Mol]:
     """Read molecules from a file
 
     Parameters
     ----------
     file : str
-        Path to the file, which can be a .sdf
+        Path to the file, which can be a .sdf, .sdfgz, .mae, .maegz, .smi, .csv, .xlsx or .xls file.
 
     Returns
     -------
-    mol_gen : Iterator[rdkit.Chem.rdchem.Mol]
+    mol_gen : Generator[rdkit.Chem.rdchem.Mol]
         A generator of molecules
 
     Notes
@@ -146,7 +145,7 @@ def is_pains(mol: Chem.rdchem.Mol) -> bool:
 
 def calc_descs(
     mol: Chem.rdchem.Mol,
-    desc_names: Iterable[str] | str = DESC_NAMES,
+    desc_names: Sequence[str] | str = DESC_NAMES,
 ) -> tuple[float] | float:
     """Calculate molecular descriptors
 
@@ -154,27 +153,25 @@ def calc_descs(
     ----------
     mol : rdkit.Chem.rdchem.Mol
         A molecule
-    desc_names : Iterable[str, ...] | str, optional
-        A list of descriptor names, by default DESC_NAMES, or a string of descriptor name.
+    desc_names : Sequence[str, ...] | str, optional
+        A list of descriptor names, by default `DESC_NAMES`, or a string of descriptor name.
 
     Returns
     -------
     descriptors : tuple[float] | float
         A list of molecular descriptors, or a single descriptor value
-        'MolWt', 'MolLogP', 'NumHAcceptors' and 'NumHDonors' are lipinski's rule of five descriptors;
-        'FractionCSP3', 'NumRotatableBonds', 'RingCount', 'TPSA' and 'qed' are other common descriptors.
+        `MolWt`, `MolLogP`, `NumHAcceptors` and `NumHDonors` are lipinski`s rule of five descriptors;
+        `FractionCSP3`, `NumRotatableBonds`, `RingCount`, `TPSA` and `qed` are other common descriptors.
     """
 
     if isinstance(desc_names, str):
         if desc_names not in DEFAULT_DESC_NAMES:
-            raise KeyError(
-                f"Descriptor name should be in {DEFAULT_DESC_NAMES}."
-            )
+            raise KeyError(f"Descriptor name should be in {DEFAULT_DESC_NAMES}.")
         # Directly pass a string to desc_names will cause every character to be a "descriptor name"
         # and return a tuple of interger 777 for UNKNOWN reasons
         calc = MoleculeDescriptors.MolecularDescriptorCalculator((desc_names,))
         return calc.CalcDescriptors(mol)[0]
-    elif isinstance(desc_names, Iterable):
+    elif isinstance(desc_names, Sequence):
         if invalid_filter_keys := set(desc_names) - set(DEFAULT_DESC_NAMES):
             raise KeyError(f"Invalid descriptor names: {invalid_filter_keys}")
         calc = MoleculeDescriptors.MolecularDescriptorCalculator(desc_names)
@@ -220,10 +217,11 @@ def filt_descs(
 
 def draw_structures(
     mols: list[Chem.rdchem.Mol],
-    *args: list[str],
+    *titles: Unpack[tuple[Sequence[str]]],
     output_file: str | None = None,
     mols_per_row: int = 12,
     sub_img_size: tuple[float, float] = (300, 300),
+    delimiter: str = "\n",
 ) -> Image.Image | None:
     """Draw molecules
 
@@ -231,14 +229,16 @@ def draw_structures(
     ----------
     mols : list[rdkit.Chem.rdchem.Mol]
         A list of molecules
-    *args : list[str]
-        Lists of molecule properties, in the same order as mols
+    titles : tuple[Sequence[str], ...]
+        A tuple of molecule properties to be displayed
     output_file : str, optional
         Path to the output file, by default None
     mols_per_row : int, optional
         Number of molecules per row, by default 10
     sub_img_size : tuple[float, float], optional
         Size of each sub-image, by default (600, 600)
+    delimiter : str, optional
+        Delimiter to join the molecule properties, by default "\n"
 
     Returns
     -------
@@ -248,7 +248,7 @@ def draw_structures(
 
     Chem.rdDepictor.SetPreferCoordGen(True)
 
-    legends = [" ".join(mol_prop) for mol_prop in zip(*args)]
+    legends = [delimiter.join(mol_prop) for mol_prop in zip(*titles)]
     max_mols = len(mols)
 
     try:
@@ -257,7 +257,7 @@ def draw_structures(
             molsPerRow=mols_per_row,  # molsPerRow should not be too small
             subImgSize=sub_img_size,
             legends=legends,
-            # returnPNG should be set EXPLICITLY to False
+            # returnPNG must be set EXPLICITLY to False
             # to avoid error in Jupyter Notebook
             returnPNG=False,
             maxMols=max_mols,

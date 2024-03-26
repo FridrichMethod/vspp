@@ -1,8 +1,9 @@
 import os
 import logging
 import argparse
-from itertools import chain
 import multiprocessing as mp
+from itertools import chain
+from typing import Unpack
 
 import pandas as pd
 from rdkit import Chem
@@ -111,11 +112,11 @@ def extract_similar_structures(
     cutoff : float, optional
         Tanimoto similarity cutoff, by default 0.8.
     fp_type : str, optional
-        Fingerprint type, by default "topological_torsion".
+        Fingerprint type, by default `topological_torsion`.
     similarity_metric : str, optional
-        Similarity metric, by default "dice".
-    **kwargs : **dict
-        Other arguments for draw_structures.
+        Similarity metric, by default `dice`.
+    kwargs : 
+        Other arguments for `draw_structures`.
 
     Returns
     -------

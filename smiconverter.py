@@ -3,7 +3,7 @@ import logging
 import argparse
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterator
+from typing import Self
 from warnings import warn
 
 from tqdm.notebook import tqdm
@@ -91,7 +91,7 @@ class SMIConverter:
 
         logging.info("%s molecules are successfully converted.", self.num)
 
-    def __iter__(self):
+    def __iter__(self) -> Self
         """Return the iterator object itself. This is required to be iterable."""
 
         return self
