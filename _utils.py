@@ -33,7 +33,7 @@ DESC_NAMES: tuple[str, ...] = (
 DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
 
-def read_mols(file: str) -> Generator[Chem.rdchem.Mol]:
+def read_mols(file: str) -> Generator[Chem.rdchem.Mol, None, None]:
     """Read molecules from a file
 
     Parameters
@@ -43,7 +43,7 @@ def read_mols(file: str) -> Generator[Chem.rdchem.Mol]:
 
     Returns
     -------
-    mol_gen : Generator[rdkit.Chem.rdchem.Mol]
+    mol_gen : Generator[rdkit.Chem.rdchem.Mol, None, None]
         A generator of molecules
 
     Notes
@@ -221,7 +221,7 @@ def draw_structures(
     output_file: str | None = None,
     mols_per_row: int = 12,
     sub_img_size: tuple[float, float] = (300, 300),
-    delimiter: str = "\n",
+    delimiter: str = " ",
 ) -> Image.Image | None:
     """Draw molecules
 
