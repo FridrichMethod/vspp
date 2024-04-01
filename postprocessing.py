@@ -92,6 +92,7 @@ def _gen_mol_info(
     )  # Generate canonical isomeric SMILES
     pains = is_pains(mol)
     descriptors = calc_descs(mol)
+    assert isinstance(descriptors, tuple)
     fp = gen_fp(mol, fp_type)
     phase_data = [
         title,

@@ -33,13 +33,15 @@ DESC_NAMES: tuple[str, ...] = (
 DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
 
-def read_mols(file: str) -> Generator[Chem.rdchem.Mol, None, None]:
+def read_mols(file: str, multithreaded=False) -> Generator[Chem.rdchem.Mol, None, None]:
     """Read molecules from a file
 
     Parameters
     ----------
     file : str
         Path to the file, which can be a .sdf, .sdfgz, .mae, .maegz, .smi, .csv, .xlsx or .xls file.
+    multithreaded : bool, optional
+        Whether to use multithreading, by default False
 
     Returns
     -------
@@ -48,7 +50,7 @@ def read_mols(file: str) -> Generator[Chem.rdchem.Mol, None, None]:
 
     Notes
     -----
-    Using multithreading and multiprocessing to read and process molecules from a file, so the order of the molecules may be different from the original file.
+    Using multithreading and multiprocessing to read and process molecules from a file, so the order of the molecules may not be preserved.
     """
 
     # Get the file extension
@@ -58,25 +60,37 @@ def read_mols(file: str) -> Generator[Chem.rdchem.Mol, None, None]:
     match ext:
         case ".sdf":
             return (
-                mol
-                for mol in Chem.MultithreadedSDMolSupplier(
-                    file,
-                    numWriterThreads=thread_num,
-                    sizeInputQueue=queue_size,
-                    sizeOutputQueue=queue_size,
+                (
+                    mol
+                    for mol in Chem.MultithreadedSDMolSupplier(
+                        file,
+                        numWriterThreads=thread_num,
+                        sizeInputQueue=queue_size,
+                        sizeOutputQueue=queue_size,
+                    )
+                    if mol is not None
                 )
-                if mol is not None
+                if multithreaded
+                else (mol for mol in Chem.SDMolSupplier(file) if mol is not None)
             )
         case ".sdfgz":
             return (
-                mol
-                for mol in Chem.MultithreadedSDMolSupplier(
-                    gzip.open(file),
-                    numWriterThreads=thread_num,
-                    sizeInputQueue=queue_size,
-                    sizeOutputQueue=queue_size,
+                (
+                    mol
+                    for mol in Chem.MultithreadedSDMolSupplier(
+                        gzip.open(file),
+                        numWriterThreads=thread_num,
+                        sizeInputQueue=queue_size,
+                        sizeOutputQueue=queue_size,
+                    )
+                    if mol is not None
                 )
-                if mol is not None
+                if multithreaded
+                else (
+                    mol
+                    for mol in Chem.SDMolSupplier(gzip.open(file))
+                    if mol is not None
+                )
             )
         case ".mae":
             return (mol for mol in Chem.MaeMolSupplier(file) if mol is not None)
@@ -86,20 +100,21 @@ def read_mols(file: str) -> Generator[Chem.rdchem.Mol, None, None]:
             )
         case ".smi":
             return (
-                mol
-                for mol in Chem.MultithreadedSmilesMolSupplier(
-                    file,
-                    numWriterThreads=thread_num,
-                    sizeInputQueue=queue_size,
-                    sizeOutputQueue=queue_size,
+                (
+                    mol
+                    for mol in Chem.MultithreadedSmilesMolSupplier(
+                        file,
+                        numWriterThreads=thread_num,
+                        sizeInputQueue=queue_size,
+                        sizeOutputQueue=queue_size,
+                    )
+                    if mol is not None
                 )
-                if mol is not None
+                if multithreaded
+                else (mol for mol in Chem.SmilesMolSupplier(file) if mol is not None)
             )
         case ".csv" | ".xlsx" | ".xls":
-            if ext == ".csv":
-                df = pd.read_csv(file)
-            else:
-                df = pd.read_excel(file)
+            df = pd.read_csv(file) if ext == ".csv" else pd.read_excel(file)
 
             def _process_df_row(row: pd.Series) -> Chem.rdchem.Mol:
                 """Process a row of a dataframe to a molecule"""
@@ -153,7 +168,7 @@ def calc_descs(
     ----------
     mol : rdkit.Chem.rdchem.Mol
         A molecule
-    desc_names : Sequence[str, ...] | str, optional
+    desc_names : Sequence[str] | str, optional
         A list of descriptor names, by default `DESC_NAMES`, or a string of descriptor name.
 
     Returns
@@ -191,7 +206,7 @@ def filt_descs(
     mol : rdkit.Chem.rdchem.Mol
         A molecule
     filt : dict[str, tuple[float, float]]
-        A dictionary of descriptor names and their range
+        A dictionary of descriptor names and their ranges
 
     Returns
     -------
@@ -202,8 +217,7 @@ def filt_descs(
     if not filt:
         return True
 
-    descs = calc_descs(mol, filt.keys())
-    assert isinstance(descs, tuple)
+    descs = calc_descs(mol, filt.keys())  # type: ignore
     bounds = filt.values()
 
     def _check_desc(desc: float, bound: tuple[float, float]) -> bool:
@@ -212,13 +226,14 @@ def filt_descs(
         min_val, max_val = bound
         return min_val <= desc <= max_val
 
-    return all(_check_desc(desc, bound) for desc, bound in zip(descs, bounds))
+    return all(_check_desc(desc, bound) for desc, bound in zip(descs, bounds))  # type: ignore
 
 
 def draw_structures(
     mols: list[Chem.rdchem.Mol],
-    *titles: Unpack[tuple[Sequence[str]]],
+    titles: Sequence[str] | tuple[Sequence[str], ...],
     output_file: str | None = None,
+    *,
     mols_per_row: int = 12,
     sub_img_size: tuple[float, float] = (300, 300),
     delimiter: str = " ",
@@ -229,8 +244,8 @@ def draw_structures(
     ----------
     mols : list[rdkit.Chem.rdchem.Mol]
         A list of molecules
-    titles : tuple[Sequence[str], ...]
-        A tuple of molecule properties to be displayed
+    titles : Sequence[str] | tuple[Sequence[str], ...]
+        A list of titles or a tuple of lists of titles to be displayed below each molecule
     output_file : str, optional
         Path to the output file, by default None
     mols_per_row : int, optional
@@ -247,8 +262,10 @@ def draw_structures(
     """
 
     Chem.rdDepictor.SetPreferCoordGen(True)
-
-    legends = [delimiter.join(mol_prop) for mol_prop in zip(*titles)]
+    if all(isinstance(title, str) for title in titles):
+        legends = titles
+    else:
+        legends = [delimiter.join(mol_prop) for mol_prop in zip(*titles)]
     max_mols = len(mols)
 
     try:
@@ -260,11 +277,11 @@ def draw_structures(
             # returnPNG must be set EXPLICITLY to False
             # to avoid error in Jupyter Notebook
             returnPNG=False,
-            maxMols=max_mols,
+            maxMols=max_mols,  # maxMols must be set large enough to draw all molecules
         )
     except RuntimeError:
         warn(
-            "molsPerRow is too small, try to increase it.",
+            "`molsPerRow` is too small, try to increase it.",
             RuntimeWarning,
         )
         return None
@@ -300,7 +317,7 @@ def gen_fp(
         case "morgan":
             return AllChem.GetMorganGenerator(radius=2, fpSize=1024).GetFingerprint(
                 mol
-            )  # ECFP4
+            )  # ECFP4, `radius=3` for ECFP6
         case "maccs":
             return Chem.rdMolDescriptors.GetMACCSKeysFingerprint(mol)
         case "rdkit":
@@ -368,18 +385,16 @@ def cluster_fps(
     """
 
     nfps = len(fps)
-
+    # Calculate the distance matrix
     distances = [
         1 - calc_sim(fps[i], fps[j], similarity_metric=similarity_metric)
         for i in range(nfps)
         for j in range(i)
-    ]  # Calculate the distance matrix
+    ]
 
-    clusters = list(
-        Butina.ClusterData(distances, nfps, 1 - cutoff, isDistData=True)
-    )  # Cluster the molecules by their Morgan fingerprints
-    clusters.sort(
-        key=len, reverse=True
-    )  # Sort the clusters by the number of molecules in each cluster
+    # Cluster the molecules by their Morgan fingerprints
+    clusters = list(Butina.ClusterData(distances, nfps, 1 - cutoff, isDistData=True))
+    # Sort the clusters by the number of molecules in each cluster
+    clusters.sort(key=len, reverse=True)
 
     return clusters

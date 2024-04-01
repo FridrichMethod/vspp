@@ -20,13 +20,16 @@ class SMIConverter:
     Attributes
     ----------
     file : str
-        Path to the input file
+        Path to the file to be converted
     prop : str, optional
-        The property to be used as the title, by default "_Name"
+        The property of molecules, especially in .sdf files, to be used as the title, 
+        by default "_Name", i.e., the default name of the molecule
     prefix : str, optional
-        The prefix to be added to the title, by default ""
-    filter : dict[str, tuple[float, float]] | None, optional
-        The filter to be applied to the descriptors, by default None
+        The prefix to be added to the title in .smi files for output,
+        by default "", i.e., no prefix
+    filt : dict[str, tuple[float, float]] | None, optional
+        The filter to be applied to the descriptors, by default None,
+        should be a dictionary of descriptor names and their ranges
     smi_ttl : list[tuple[str, str]]
         A list of tuples of SMILES and title
     num : int
@@ -61,7 +64,8 @@ class SMIConverter:
         prefix : str, optional
             The prefix to be added to the title, by default ""
         filt : dict[str, tuple[float, float]] | None, optional
-            The filter to be applied to the descriptors, by default None
+            The filter to be applied to the descriptors, by default None,
+            should be a dictionary of descriptor names and their ranges
 
         Returns
         -------
@@ -186,7 +190,9 @@ class SMIConverter:
             self._write_batch(self.smi_ttl, 0)
             logging.info(
                 "The .smi file is written to %s",
-                os.path.join(output_dir, os.path.splitext(self.file)[0] + "_0.smi"),
+                os.path.join(
+                    output_dir, f"{os.path.splitext(self.file)[0]}_0.smi"
+                ),
             )
         else:
             with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2 + 1) as executor:
@@ -196,10 +202,11 @@ class SMIConverter:
                         self.smi_ttl[i : i + batch_size],
                         i // batch_size,
                     )
-
             logging.info(
                 "All .smi files are written to %s",
-                os.path.join(output_dir, os.path.splitext(self.file)[0] + "_*.smi"),
+                os.path.join(
+                    output_dir, f"{os.path.splitext(self.file)[0]}_*.smi"
+                ),
             )
 
 
@@ -218,19 +225,22 @@ def convert_smi(
     Parameters
     ----------
     input_file : str
-        Path to the input file
+        Path to the input file to be converted
     prop : str, optional
-        The property to be used as the title, by default "_Name"
+        The property of molecules, especially in .sdf files, to be used as the title, 
+        by default "_Name", i.e., the default name of the molecule
     prefix : str, optional
-        The prefix to be added to the title, by default ""
+        The prefix to be added to the title in .smi files for output,
+        by default "", i.e., no prefix
     filt : dict[str, tuple[float, float]] | None, optional
-        The filter to be applied to the descriptors, by default None
+        The filter to be applied to the descriptors, by default None,
+        should be a dictionary of descriptor names and their ranges
     deduplicate : bool, optional
         Deduplicate the molecules, by default False
     sort : bool, optional
         Sort the molecules, by default False
     batch_size : int, optional
-        The batch size to split the .smi file, by default 0
+        The batch size to split the .smi file in the output, by default 0
 
     Returns
     -------
@@ -290,22 +300,24 @@ def main():
     parser.add_argument(
         "-b",
         "--batch_size",
-        help="The batch size to split the .smi file",
+        help="The batch size to split the .smi file, by default 0, i.e., no batches generated",
         type=int,
         default=0,
     )
 
     args = parser.parse_args()
+    filt = dict(
+        zip(
+            args.filt[::3],
+            zip(map(float, args.filt[1::3]), map(float, args.filt[2::3])),
+        )
+    )
+
     convert_smi(
         args.input_file,
         prop=args.prop,
         prefix=args.prefix,
-        filt=dict(
-            zip(
-                args.filt[::3],
-                zip(map(float, args.filt[1::3]), map(float, args.filt[2::3])),
-            )
-        ),
+        filt=filt,
         deduplicate=args.deduplicate,
         sort=args.sort,
         batch_size=args.batch_size,
