@@ -139,7 +139,7 @@ def extract_similar_structures(
     if not compounds_file.endswith(".smi"):
         raise ValueError("The compound file should be a .smi file with a header")
     # Use `line`, `queries_title` and `queries_fps`
-    # instead of `queries: list[rdkit.Chem.Mol]` to save memory
+    # instead of `queries: list[rdkit.Chem.rdchem.Mol]` to save memory
     logging.info("Generate input arguments...")
     with open(compounds_file, "r", encoding="utf-8") as f:
         f.readline()  # Skip the header

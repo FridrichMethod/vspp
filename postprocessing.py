@@ -41,12 +41,11 @@ def _mmgbsa_dict(mmgbsa_txt: str) -> dict[str, float]:
         for line in reversed(
             lines
         ):  # Reverse the lines so that molecules with the lowest MM-GBSA scores are stored in the dictionary
-            match_line = re.match(
+            if match_line := re.match(
                 r"\s*\d+\s+(\S+)\s+\d+\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)", line
-            )
-            if match_line:
-                title = match_line.group(1)
-                mmgbsa_score = float(match_line.group(2))
+            ):
+                title = match_line[1]
+                mmgbsa_score = float(match_line[2])
                 mmgbsa_d[title] = mmgbsa_score
 
     return mmgbsa_d
@@ -204,9 +203,7 @@ def analyze_mol_info(
             "cluster_centroid",
         ],
     )
-    df.sort_values(
-        by=["cluster_id", "mmgbsa_score"], inplace=True
-    )  # Sort the dataframe by cluster ID and MM-GBSA score
+    df = df.sort_values(by=["cluster_id", "mmgbsa_score"])
 
     if output_file is not None:
         df.to_csv(output_file, index=False)

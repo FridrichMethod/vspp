@@ -22,7 +22,7 @@ class SMIConverter:
     file : str
         Path to the file to be converted
     prop : str, optional
-        The property of molecules, especially in .sdf files, to be used as the title, 
+        The property of molecules, especially in .sdf files, to be used as the title,
         by default "_Name", i.e., the default name of the molecule
     prefix : str, optional
         The prefix to be added to the title in .smi files for output,
@@ -83,11 +83,12 @@ class SMIConverter:
 
         logging.info("Converting %s to .smi file...", file)
 
-        # _extract_smi_ttl is slower than multithreaded read_mols, but multiprocessing did not make it faster
-        self.smi_ttl: list[tuple[str, str]] = [
+        # _extract_smi_ttl is slower than multithreaded read_mols,
+        # but multiprocessing did not make it faster
+        self.smi_ttl: list[tuple[str, str]] = [  # type: ignore
             self._extract_smi_ttl(mol)
             for mol in tqdm(
-                read_mols(self.file), desc="Reading", unit="mol"
+                read_mols(self.file, multithreaded=False), desc="Reading", unit="mol"
             )  # Sometimes multithreaded read_mol will cause deadlock; please use single thread instead
             if filt_descs(mol, self.filt)
         ]
@@ -95,7 +96,7 @@ class SMIConverter:
 
         logging.info("%s molecules are successfully converted.", self.num)
 
-    def __iter__(self) -> Self
+    def __iter__(self) -> Self:
         """Return the iterator object itself. This is required to be iterable."""
 
         return self
@@ -190,9 +191,7 @@ class SMIConverter:
             self._write_batch(self.smi_ttl, 0)
             logging.info(
                 "The .smi file is written to %s",
-                os.path.join(
-                    output_dir, f"{os.path.splitext(self.file)[0]}_0.smi"
-                ),
+                os.path.join(output_dir, f"{os.path.splitext(self.file)[0]}_0.smi"),
             )
         else:
             with ThreadPoolExecutor(max_workers=mp.cpu_count() * 2 + 1) as executor:
@@ -204,9 +203,7 @@ class SMIConverter:
                     )
             logging.info(
                 "All .smi files are written to %s",
-                os.path.join(
-                    output_dir, f"{os.path.splitext(self.file)[0]}_*.smi"
-                ),
+                os.path.join(output_dir, f"{os.path.splitext(self.file)[0]}_*.smi"),
             )
 
 
@@ -227,7 +224,7 @@ def convert_smi(
     input_file : str
         Path to the input file to be converted
     prop : str, optional
-        The property of molecules, especially in .sdf files, to be used as the title, 
+        The property of molecules, especially in .sdf files, to be used as the title,
         by default "_Name", i.e., the default name of the molecule
     prefix : str, optional
         The prefix to be added to the title in .smi files for output,
