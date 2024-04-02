@@ -1,15 +1,14 @@
-import os
-import logging
 import argparse
+import logging
 import multiprocessing as mp
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Self
 from warnings import warn
 
-from tqdm.notebook import tqdm
 from rdkit import Chem
 
-from ._utils import read_mols, filt_descs
+from ._utils import filt_descs, read_mols, smart_tqdm
 
 
 class SMIConverter:
@@ -87,7 +86,7 @@ class SMIConverter:
         # but multiprocessing did not make it faster
         self.smi_ttl: list[tuple[str, str]] = [  # type: ignore
             self._extract_smi_ttl(mol)
-            for mol in tqdm(
+            for mol in smart_tqdm(
                 read_mols(self.file, multithreaded=False), desc="Reading", unit="mol"
             )  # Sometimes multithreaded read_mol will cause deadlock; please use single thread instead
             if filt_descs(mol, self.filt)

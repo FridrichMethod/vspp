@@ -1,21 +1,13 @@
-import os
-import logging
 import argparse
-import re
+import logging
 import multiprocessing as mp
+import os
+import re
 
 import pandas as pd
-from rdkit import Chem
-from rdkit import DataStructs
-from tqdm.notebook import tqdm
+from rdkit import Chem, DataStructs
 
-from ._utils import (
-    read_mols,
-    is_pains,
-    calc_descs,
-    gen_fp,
-    cluster_fps,
-)
+from ._utils import calc_descs, cluster_fps, gen_fp, is_pains, read_mols, smart_tqdm
 
 
 def _mmgbsa_dict(mmgbsa_txt: str) -> dict[str, float]:
@@ -157,7 +149,7 @@ def analyze_mol_info(
     with mp.Pool(mp.cpu_count() - 1) as pool:
         mol_info = pool.starmap(
             _gen_mol_info,
-            tqdm(_star_args, total=len(_star_args), desc="Analyzing", unit="mol"),
+            smart_tqdm(_star_args, total=len(_star_args), desc="Analyzing", unit="mol"),
         )
 
     fps, phase_data = zip(*mol_info)

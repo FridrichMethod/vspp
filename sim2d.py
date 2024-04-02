@@ -1,24 +1,21 @@
-import os
-import logging
 import argparse
+import logging
 import multiprocessing as mp
+import os
 from itertools import chain
-from typing import Unpack, Sequence
+from typing import Sequence, Unpack
 
 import pandas as pd
-from rdkit import Chem
-from rdkit import DataStructs
-
-# If you directly run this script, use `from tqdm import tqdm` instead of `... tqdm.notebook`
-from tqdm.notebook import tqdm
+from rdkit import Chem, DataStructs
 
 from ._utils import (
-    read_mols,
-    is_pains,
     calc_descs,
+    calc_sim,
     draw_structures,
     gen_fp,
-    calc_sim,
+    is_pains,
+    read_mols,
+    smart_tqdm,
 )
 
 
@@ -160,7 +157,7 @@ def extract_similar_structures(
     with mp.Pool(mp.cpu_count() - 1) as pool:
         raw_data = pool.starmap(
             _compare_molecules,
-            tqdm(_star_args, total=len(_star_args), desc="Comparing", unit="mol"),
+            smart_tqdm(_star_args, total=len(_star_args), desc="Comparing", unit="mol"),
         )
 
     # Flatten the list
