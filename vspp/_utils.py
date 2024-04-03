@@ -4,13 +4,13 @@ from typing import Callable, Generator, Iterable, Sequence, Unpack
 from warnings import warn
 
 import pandas as pd
-from tqdm import tqdm
-from tqdm.notebook import tqdm as tqdm_notebook
 from PIL import Image
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog
 from rdkit.ML.Cluster import Butina
 from rdkit.ML.Descriptors import MoleculeDescriptors
+from tqdm import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
 
 DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
@@ -138,9 +138,10 @@ def cluster_fps(
 
 def draw_structures(
     mols: list[Chem.rdchem.Mol],
-    titles: Sequence[str] | tuple[Sequence[str], ...],
     output_file: str | None = None,
     *,
+    titles: Sequence[str] | tuple[Sequence[str], ...] | None = None,
+    pattern: Chem.rdchem.Mol | None = None,
     mols_per_row: int = 12,
     sub_img_size: tuple[float, float] = (300, 300),
     delimiter: str = " ",
@@ -151,10 +152,12 @@ def draw_structures(
     ----------
     mols : list[rdkit.Chem.rdchem.Mol]
         A list of molecules
-    titles : Sequence[str] | tuple[Sequence[str], ...]
-        A list of titles or a tuple of lists of titles to be displayed below each molecule
-    output_file : str, optional
+    output_file : str | None, optional
         Path to the output file, by default None
+    titles : Sequence[str] | tuple[Sequence[str], ...] | None, optional
+        A list of titles or a tuple of lists of titles to be displayed below each molecule
+    pattern : Chem.rdchem.Mol | None, optional
+        SMARTS pattern to align and highlight the substructure, by default None
     mols_per_row : int, optional
         Number of molecules per row, by default 10
     sub_img_size : tuple[float, float], optional
@@ -169,11 +172,38 @@ def draw_structures(
     """
 
     Chem.rdDepictor.SetPreferCoordGen(True)
-    if all(isinstance(title, str) for title in titles):
+
+    if (titles is None) or all(isinstance(title, str) for title in titles):
         legends = titles
     else:
         legends = [delimiter.join(mol_prop) for mol_prop in zip(*titles)]
     max_mols = len(mols)
+
+    if pattern is None:
+        highlight_atom_lists = None
+        highlight_bond_lists = None
+    else:
+        AllChem.Compute2DCoords(pattern)
+
+        highlight_atom_lists = []
+        highlight_bond_lists = []
+        for mol in mols:
+            if mol.HasSubstructMatch(pattern):
+                AllChem.GenerateDepictionMatching2DStructure(mol, pattern)
+                highlight_atom = list(mol.GetSubstructMatch(pattern))
+                highlight_atom_lists.append(highlight_atom)
+
+                highlight_bond = [
+                    mol.GetBondBetweenAtoms(
+                        highlight_atom[bond.GetBeginAtomIdx()],
+                        highlight_atom[bond.GetEndAtomIdx()],
+                    ).GetIdx()
+                    for bond in pattern.GetBonds()
+                ]
+                highlight_bond_lists.append(highlight_bond)
+            else:
+                highlight_atom_lists.append([])
+                highlight_bond_lists.append([])
 
     try:
         img = Draw.MolsToGridImage(
@@ -183,6 +213,8 @@ def draw_structures(
             legends=legends,
             # returnPNG must be set EXPLICITLY to False
             # to avoid error in Jupyter Notebook
+            highlightAtomLists=highlight_atom_lists,
+            highlightBondLists=highlight_bond_lists,
             returnPNG=False,
             maxMols=max_mols,  # maxMols must be set large enough to draw all molecules
         )
@@ -425,6 +457,4 @@ def smart_tqdm(iterable: Iterable, *args, **kwargs) -> tqdm | tqdm_notebook:
             )  # Jupyter notebook or qtconsole
         raise RuntimeError  # Not in Jupyter, raise an error to trigger the fallback
     except (NameError, RuntimeError):
-        return tqdm(
-            iterable, *args, **kwargs
-        )  # Probably standard Python interpreter
+        return tqdm(iterable, *args, **kwargs)  # Probably standard Python interpreter

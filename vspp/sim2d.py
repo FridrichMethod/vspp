@@ -3,7 +3,7 @@ import logging
 import multiprocessing as mp
 import os
 from itertools import chain
-from typing import Sequence, Unpack
+from typing import Any, Sequence, Unpack
 from warnings import warn
 
 import pandas as pd
@@ -61,7 +61,7 @@ class SimExtractor:
 
     def __repr__(self) -> str:
         return (
-            f"SimExtractor(queries={len(self.queries)}, "
+            f"SimExtractor(queries={self.queries_title}, "
             f"cutoff={self._cutoff}, "
             f"fp_type={self._fp_type}, "
             f"similarity_metric={self._similarity_metric})"
@@ -112,8 +112,8 @@ class SimExtractor:
     def _compare_molecules(
         self,
         line: str,
-    ) -> list[list]:
-        """Compare a molecule with a line of SMILES and title in a .smi file
+    ) -> list[list[Any]]:
+        """Compare queries with a line of SMILES and title in a .smi file
 
         Parameters
         ----------
@@ -122,7 +122,7 @@ class SimExtractor:
 
         Returns
         -------
-        sim_struct_info : list[list]
+        sim_struct_info : list[list[Any]]
             A list of list of similar structures and their properties if any.
         """
 
@@ -181,7 +181,7 @@ class SimExtractor:
         # Use `line`, `queries_title` and `queries_fps`
         # instead of `queries: list[rdkit.Chem.rdchem.Mol]` to save memory
         with open(compounds_file, "r", encoding="utf-8") as f:
-            args = f.readlines()
+            _args = f.readlines()
 
         # Compare molecules in parallel
         logging.info("Start comparing molecules...")
@@ -189,8 +189,8 @@ class SimExtractor:
             raw_data = pool.map(
                 self._compare_molecules,
                 smart_tqdm(
-                    args,
-                    total=len(args),
+                    _args,
+                    total=len(_args),
                     desc="Comparing",
                     unit="mol",
                 ),
@@ -215,12 +215,12 @@ class SimExtractor:
                 "ring_count",
                 "tpsa",
                 "druglikeness",
-                "similar_query",
+                "query_title",
                 "similarity",
             ],
         )
         df = df.sort_values(
-            by=["similar_query", "similarity", "title"],
+            by=["query_title", "similarity", "title"],
             ascending=[True, False, True],
         )
 
@@ -241,9 +241,9 @@ class SimExtractor:
             raise ValueError("No similar structures are extracted yet.")
 
         os.makedirs(output_dir, exist_ok=True)
-        for query, group in self.similar_structures.groupby("similar_query"):
-            group.to_csv(os.path.join(output_dir, f"{query}.csv"), index=False)
-            logging.info("Write %s.csv", query)
+        for query_title, group in self.similar_structures.groupby("query_title"):
+            group.to_csv(os.path.join(output_dir, f"{query_title}.csv"), index=False)
+            logging.info("Write %s.csv", query_title)
 
     def draw(self, output_dir: str, **kwargs) -> None:
         """Draw structures
@@ -259,17 +259,18 @@ class SimExtractor:
         if self.similar_structures.empty:
             raise ValueError("No similar structures are extracted yet.")
 
-        for query, group in self.similar_structures.groupby("similar_query"):
+        for query_title, group in self.similar_structures.groupby("query_title"):
             draw_structures(
                 group["smiles"].apply(Chem.MolFromSmiles).tolist(),
-                (
+                os.path.join(output_dir, f"{query_title}.png"),
+                titles=(
                     group["title"].tolist(),
+                    group["query_title"].tolist(),
                     group["similarity"].apply(lambda x: f"{x:.3f}").tolist(),
                 ),
-                os.path.join(output_dir, f"{query}.png"),
                 **kwargs,
             )
-            logging.info("Draw %s.png", query)
+            logging.info("Draw %s.png", query_title)
 
 
 def extract_similar_structures(
@@ -300,14 +301,13 @@ def extract_similar_structures(
     similarity_metric : str, optional
         Similarity metric, by default "dice"
 
-
     Returns
     -------
     df : pandas.DataFrame
         A dataframe of similar structures.
     """
 
-    # Read the query file
+    # Read the queries file
     queries = [mol for mol in read_mols(queries_file) if mol is not None]
 
     # Read the compound file
@@ -338,6 +338,245 @@ def extract_similar_structures(
     return sim_extractor.similar_structures
 
 
+class MatExtractor:
+    """A class to extract match structures from a compound library"""
+
+    def __init__(
+        self,
+        patterns: Sequence[Chem.rdchem.Mol],
+    ) -> None:
+        """Initialize the MatExtractor
+
+        Parameters
+        ----------
+        patterns : Sequence[rdkit.Chem.rdchem.Mol]
+            A list of SMARTS patterns
+
+        Returns
+        -------
+        None
+        """
+
+        self.patterns = [pattern for pattern in patterns if pattern is not None]
+        self.patterns_smarts = [Chem.MolToSmarts(pattern) for pattern in self.patterns]
+
+        self.match_structures: pd.DataFrame = pd.DataFrame()
+
+    def __repr__(self) -> str:
+        return f"MatExtractor(patterns={self.patterns_smarts})"
+
+    def __len__(self) -> int:
+        return len(self.match_structures)
+
+    def _compare_molecules(
+        self,
+        line: str,
+    ) -> list[list[Any]]:
+        """Compare patterns with a line of SMILES and title in a .smi file
+
+        Parameters
+        ----------
+        line : str
+            A line of SMILES and title, separated by a space
+
+        Returns
+        -------
+        match_struct_info : list[list[Any]]
+            A list of list of match structures and their properties if any.
+        """
+
+        try:
+            smiles, title = line.split()
+        except ValueError:
+            return []
+
+        mol = Chem.MolFromSmiles(smiles)
+        # It is possible that SMILES Parse Error occurs (by warning)
+        # if the SMILES is invalid (possibly due to the header in the .smi file)
+        if mol is None:
+            return []
+
+        mat_struct_info = []
+        for pattern, smarts in zip(self.patterns, self.patterns_smarts):
+            if mol.HasSubstructMatch(pattern):
+                canonical_smiles = Chem.MolToSmiles(
+                    mol, canonical=True, isomericSmiles=True
+                )
+                pains = is_pains(mol)
+                descriptors = calc_descs(mol)
+                mat_struct_info.append(
+                    [
+                        title,
+                        canonical_smiles,
+                        pains,
+                        *descriptors,  # type: ignore
+                        smarts,
+                    ]
+                )
+
+        return mat_struct_info
+
+    def extract(
+        self,
+        compounds_file: str,
+    ) -> pd.DataFrame:
+        """Extract match structures from a compound library
+
+        Parameters
+        ----------
+        compounds_file : str
+            Path to the compound file, should be a .smi file, with or without a header.
+            Module `vspp.smiconverter` could be used to convert files to .smi files.
+
+        Returns
+        -------
+        df : pandas.DataFrame
+            A dataframe of match structures.
+        """
+
+        # Use `line` and `patterns_title`
+        # instead of `patterns: list[rdkit.Chem.rdchem.Mol]` to save memory
+        with open(compounds_file, "r", encoding="utf-8") as f:
+            _args = f.readlines()
+
+        # Compare molecules in parallel
+        logging.info("Start comparing molecules...")
+        with mp.Pool(mp.cpu_count() - 1) as pool:
+            raw_data = pool.map(
+                self._compare_molecules,
+                smart_tqdm(
+                    _args,
+                    total=len(_args),
+                    desc="Comparing",
+                    unit="mol",
+                ),
+            )
+
+        # Flatten the list
+        data = list(chain.from_iterable(raw_data))
+
+        # Write the output file
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "title",
+                "smiles",
+                "pains",
+                "mol_wt",
+                "log_p",
+                "h_acc",
+                "h_don",
+                "fsp3",
+                "rot_bond",
+                "ring_count",
+                "tpsa",
+                "druglikeness",
+                "smarts",
+            ],
+        )
+        df = df.sort_values(
+            by=["smarts", "title"],
+            ascending=[True, True],
+        )
+
+        self.match_structures = df
+
+        return df
+
+    def write(self, output_dir: str) -> None:
+        """Write the output files and draw structures
+
+        Parameters
+        ----------
+        output_dir : str
+            Path to the output directory
+        """
+
+        if self.match_structures.empty:
+            raise ValueError("No match structures are extracted yet.")
+
+        os.makedirs(output_dir, exist_ok=True)
+        for smarts, group in self.match_structures.groupby("smarts"):
+            group.to_csv(os.path.join(output_dir, f"{smarts}.csv"), index=False)
+            logging.info("Write %s.csv", smarts)
+
+    def draw(self, output_dir: str, **kwargs) -> None:
+        """Draw structures
+
+        Parameters
+        ----------
+        output_dir : str
+            Path to the output directory
+        kwargs :
+            Other keyword arguments for `draw_structures`.
+        """
+
+        if self.match_structures.empty:
+            raise ValueError("No match structures are extracted yet.")
+
+        for smarts, group in self.match_structures.groupby("smarts"):
+            draw_structures(
+                group["smiles"].apply(Chem.MolFromSmiles).tolist(),
+                os.path.join(output_dir, f"{smarts}.png"),
+                titles=group["title"].tolist(),
+                pattern=Chem.MolFromSmarts(smarts),
+                **kwargs,
+            )
+            logging.info("Draw %s.png", smarts)
+
+
+def extract_match_structures(
+    patterns_smarts: list[str],
+    compounds_file: str,
+    output_dir: str | None = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """Extract match structures from a compound library
+
+    Parameters
+    ----------
+    patterns_smarts : list[str]
+        A list of SMARTS patterns
+    compounds_file : str
+        Path to the compound file, should be a .smi file, with or without a header.
+        Module `vspp.smiconverter` could be used to convert files to .smi files.
+    output_dir : str, optional
+        Path to the output directory, by default None
+
+    Returns
+    -------
+    df : pandas.DataFrame
+        A dataframe of match structures.
+    """
+
+    # Read the patterns list
+    patterns = [
+        pattern for smarts in patterns_smarts if (pattern := Chem.MolFromSmarts(smarts)) is not None
+    ]
+
+    # Read the compound file
+    if not compounds_file.endswith(".smi"):
+        raise ValueError(
+            "The compound file should be a .smi file with a header. "
+            "Module `vspp.smiconverter` could be used to convert files to .smi files."
+        )
+
+    # Initialize the MatExtractor
+    mat_extractor = MatExtractor(patterns)
+
+    # Compare molecules in parallel
+    mat_extractor.extract(compounds_file)
+
+    # Write the output file
+    if output_dir is not None:
+        mat_extractor.write(output_dir)
+    # Draw structures
+    if output_dir is not None:
+        mat_extractor.draw(output_dir, **kwargs)
+
+    return mat_extractor.match_structures
+
+
 def main() -> None:
     """Main function
 
@@ -351,8 +590,14 @@ def main() -> None:
         "-q",
         "--queries",
         type=str,
-        required=True,
         help="Path to the query file",
+    )
+    parser.add_argument(
+        "-t",
+        "--patterns",
+        type=str,
+        nargs="+",
+        help="A list of SMARTS patterns",
     )
     parser.add_argument(
         "-p",
@@ -365,6 +610,7 @@ def main() -> None:
         "-o",
         "--output",
         type=str,
+        required=True,
         help="Path to the output file",
     )
     parser.add_argument(
@@ -388,16 +634,25 @@ def main() -> None:
         default="dice",
         help="Similarity metric, by default 'dice'",
     )
-    args = parser.parse_args()
 
-    extract_similar_structures(
-        args.queries,
-        args.compounds,
-        args.output,
-        cutoff=args.cutoff,
-        fp_type=args.fp_type,
-        similarity_metric=args.similarity_metric,
-    )
+    args = parser.parse_args()
+    
+    if args.queries is not None:
+        extract_similar_structures(
+            args.queries,
+            args.compounds,
+            args.output,
+            cutoff=args.cutoff,
+            fp_type=args.fp_type,
+            similarity_metric=args.similarity_metric,
+        )
+    
+    if args.patterns is not None:
+        extract_match_structures(
+            args.patterns,
+            args.compounds,
+            args.output,
+        )
 
 
 if __name__ == "__main__":
