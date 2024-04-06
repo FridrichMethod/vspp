@@ -74,40 +74,13 @@ class SimExtractor:
     def cutoff(self) -> float:
         return self._cutoff
 
-    @cutoff.setter
-    def cutoff(self, value: float) -> None:
-        self._cutoff = value
-        self.similar_structures = pd.DataFrame()
-        warn(
-            "The similar structures are reset due to the change of cutoff."
-            "Please run `self.extract` again to extract similar structures."
-        )
-
     @property
     def fp_type(self) -> str:
         return self._fp_type
 
-    @fp_type.setter
-    def fp_type(self, value: str) -> None:
-        self._fp_type = value
-        self.similar_structures = pd.DataFrame()
-        warn(
-            "The similar structures are reset due to the change of fingerprint type."
-            "Please run `self.extract` again to extract similar structures."
-        )
-
     @property
     def similarity_metric(self) -> str:
         return self._similarity_metric
-
-    @similarity_metric.setter
-    def similarity_metric(self, value: str) -> None:
-        self._similarity_metric = value
-        self.similar_structures = pd.DataFrame()
-        warn(
-            "The similar structures are reset due to the change of similarity metric."
-            "Please run `self.extract` again to extract similar structures."
-        )
 
     def _compare_molecules(
         self,
@@ -185,7 +158,7 @@ class SimExtractor:
 
         # Compare molecules in parallel
         logging.info("Start comparing molecules...")
-        with mp.Pool(mp.cpu_count() - 1) as pool:
+        with mp.Pool(mp.cpu_count()) as pool:
             raw_data = pool.map(
                 self._compare_molecules,
                 smart_tqdm(
@@ -263,10 +236,15 @@ class SimExtractor:
             draw_structures(
                 group["smiles"].apply(Chem.MolFromSmiles).tolist(),
                 os.path.join(output_dir, f"{query_title}.png"),
-                titles=(
-                    group["title"].tolist(),
-                    group["query_title"].tolist(),
-                    group["similarity"].apply(lambda x: f"{x:.3f}").tolist(),
+                legends=(
+                    [
+                        " ".join(x)
+                        for x in zip(
+                            group["title"],
+                            group["query_title"],
+                            group["similarity"].apply(lambda x: f"{x:.3f}"),
+                        )
+                    ]
                 ),
                 **kwargs,
             )
@@ -331,6 +309,7 @@ def extract_similar_structures(
     # Write the output file
     if output_dir is not None:
         sim_extractor.write(output_dir)
+
     # Draw structures
     if output_dir is not None:
         sim_extractor.draw(output_dir, **kwargs)
@@ -361,12 +340,7 @@ class MatExtractor:
         self.patterns_smarts = [Chem.MolToSmarts(pattern) for pattern in self.patterns]
 
         self.match_structures: pd.DataFrame = pd.DataFrame()
-
-    def __repr__(self) -> str:
-        return f"MatExtractor(patterns={self.patterns_smarts})"
-
-    def __len__(self) -> int:
-        return len(self.match_structures)
+        self.match_clusters: pd.DataFrame = pd.DataFrame()
 
     def _compare_molecules(
         self,
@@ -441,7 +415,7 @@ class MatExtractor:
 
         # Compare molecules in parallel
         logging.info("Start comparing molecules...")
-        with mp.Pool(mp.cpu_count() - 1) as pool:
+        with mp.Pool(mp.cpu_count()) as pool:
             raw_data = pool.map(
                 self._compare_molecules,
                 smart_tqdm(
@@ -474,10 +448,7 @@ class MatExtractor:
                 "smarts",
             ],
         )
-        df = df.sort_values(
-            by=["smarts", "title"],
-            ascending=[True, True],
-        )
+        df = df.sort_values(by=["smarts", "title"])
 
         self.match_structures = df
 
@@ -518,7 +489,7 @@ class MatExtractor:
             draw_structures(
                 group["smiles"].apply(Chem.MolFromSmiles).tolist(),
                 os.path.join(output_dir, f"{smarts}.png"),
-                titles=group["title"].tolist(),
+                legends=group["title"].tolist(),
                 pattern=Chem.MolFromSmarts(smarts),
                 **kwargs,
             )
@@ -551,7 +522,9 @@ def extract_match_structures(
 
     # Read the patterns list
     patterns = [
-        pattern for smarts in patterns_smarts if (pattern := Chem.MolFromSmarts(smarts)) is not None
+        pattern
+        for smarts in patterns_smarts
+        if (pattern := Chem.MolFromSmarts(smarts)) is not None
     ]
 
     # Read the compound file
@@ -570,6 +543,7 @@ def extract_match_structures(
     # Write the output file
     if output_dir is not None:
         mat_extractor.write(output_dir)
+
     # Draw structures
     if output_dir is not None:
         mat_extractor.draw(output_dir, **kwargs)
@@ -636,7 +610,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-    
+
     if args.queries is not None:
         extract_similar_structures(
             args.queries,
@@ -646,7 +620,7 @@ def main() -> None:
             fp_type=args.fp_type,
             similarity_metric=args.similarity_metric,
         )
-    
+
     if args.patterns is not None:
         extract_match_structures(
             args.patterns,

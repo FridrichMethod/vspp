@@ -3,6 +3,7 @@ import os
 from typing import Callable, Generator, Iterable, Sequence, Unpack
 from warnings import warn
 
+import numpy as np
 import pandas as pd
 from PIL import Image
 from rdkit import Chem, DataStructs
@@ -65,7 +66,7 @@ def calc_descs(
         calc = MoleculeDescriptors.MolecularDescriptorCalculator(desc_names)
         return calc.CalcDescriptors(mol)
     else:
-        assert False, "Descriptor names should be a string or an iterable of strings."
+        assert False, "Descriptor names should be a string or a sequence of strings."
 
 
 def calc_sim(
@@ -140,11 +141,10 @@ def draw_structures(
     mols: list[Chem.rdchem.Mol],
     output_file: str | None = None,
     *,
-    titles: Sequence[str] | tuple[Sequence[str], ...] | None = None,
+    legends: list[str] | None = None,
     pattern: Chem.rdchem.Mol | None = None,
-    mols_per_row: int = 12,
+    mols_per_row: int = 8,
     sub_img_size: tuple[float, float] = (300, 300),
-    delimiter: str = " ",
 ) -> Image.Image | None:
     """Draw molecules
 
@@ -154,16 +154,14 @@ def draw_structures(
         A list of molecules
     output_file : str | None, optional
         Path to the output file, by default None
-    titles : Sequence[str] | tuple[Sequence[str], ...] | None, optional
-        A list of titles or a tuple of lists of titles to be displayed below each molecule
+    legends : list[str] | None, optional
+        A list of legends, by default None
     pattern : Chem.rdchem.Mol | None, optional
         SMARTS pattern to align and highlight the substructure, by default None
     mols_per_row : int, optional
         Number of molecules per row, by default 10
     sub_img_size : tuple[float, float], optional
         Size of each sub-image, by default (600, 600)
-    delimiter : str, optional
-        Delimiter to join the molecule properties, by default "\n"
 
     Returns
     -------
@@ -173,10 +171,6 @@ def draw_structures(
 
     Chem.rdDepictor.SetPreferCoordGen(True)
 
-    if (titles is None) or all(isinstance(title, str) for title in titles):
-        legends = titles
-    else:
-        legends = [delimiter.join(mol_prop) for mol_prop in zip(*titles)]
     max_mols = len(mols)
 
     if pattern is None:
@@ -184,15 +178,15 @@ def draw_structures(
         highlight_bond_lists = None
     else:
         AllChem.Compute2DCoords(pattern)
-
         highlight_atom_lists = []
         highlight_bond_lists = []
         for mol in mols:
             if mol.HasSubstructMatch(pattern):
+                # Align the molecule to the pattern
                 AllChem.GenerateDepictionMatching2DStructure(mol, pattern)
+                # Highlight the substructure
                 highlight_atom = list(mol.GetSubstructMatch(pattern))
                 highlight_atom_lists.append(highlight_atom)
-
                 highlight_bond = [
                     mol.GetBondBetweenAtoms(
                         highlight_atom[bond.GetBeginAtomIdx()],
@@ -211,16 +205,16 @@ def draw_structures(
             molsPerRow=mols_per_row,  # molsPerRow should not be too small
             subImgSize=sub_img_size,
             legends=legends,
-            # returnPNG must be set EXPLICITLY to False
-            # to avoid error in Jupyter Notebook
             highlightAtomLists=highlight_atom_lists,
             highlightBondLists=highlight_bond_lists,
+            # returnPNG must be set EXPLICITLY to False
+            # to avoid error in Jupyter Notebook
             returnPNG=False,
             maxMols=max_mols,  # maxMols must be set large enough to draw all molecules
         )
     except RuntimeError:
         warn(
-            "`molsPerRow` is too small, try to increase it.",
+            "`molsPerRow` is too small to draw a large number of molecules, try to increase it.",
             RuntimeWarning,
         )
         return None
@@ -253,16 +247,10 @@ def filt_descs(
     if not filt:
         return True
 
-    descs = calc_descs(mol, filt.keys())  # type: ignore
-    bounds = filt.values()
+    descs = np.array(calc_descs(mol, list(filt.keys())))  # type: ignore
+    bounds = np.array(list(filt.values()))
 
-    def _check_desc(desc: float, bound: tuple[float, float]) -> bool:
-        """Check if the descriptor value is in the range"""
-
-        min_val, max_val = bound
-        return min_val <= desc <= max_val
-
-    return all(_check_desc(desc, bound) for desc, bound in zip(descs, bounds))  # type: ignore
+    return bool(np.all((bounds[:, 0] <= descs) & (descs <= bounds[:, 1])))
 
 
 def gen_fp(
@@ -288,9 +276,13 @@ def gen_fp(
 
     match fp_type:
         case "morgan":
-            return AllChem.GetMorganGenerator(radius=2, fpSize=1024).GetFingerprint(
-                mol
-            )  # ECFP4, `radius=3` for ECFP6
+            return AllChem.GetMorganGenerator(radius=2, fpSize=1024).GetFingerprint(mol)
+        case "ecfp2":
+            return AllChem.GetMorganGenerator(radius=1, fpSize=1024).GetFingerprint(mol)
+        case "ecfp4":  # ECFP4 is the same as Morgan fingerprints with radius=2
+            return AllChem.GetMorganGenerator(radius=2, fpSize=1024).GetFingerprint(mol)
+        case "ecfp6":
+            return AllChem.GetMorganGenerator(radius=3, fpSize=1024).GetFingerprint(mol)
         case "maccs":
             return Chem.rdMolDescriptors.GetMACCSKeysFingerprint(mol)
         case "rdkit":
@@ -301,7 +293,8 @@ def gen_fp(
             return AllChem.GetTopologicalTorsionGenerator().GetFingerprint(mol)
         case _:
             raise ValueError(
-                "fp_type should be one of 'morgan', 'maccs', 'rdkit', 'atom_pair' and 'topological_torsion'."
+                "fp_type should be one of 'morgan', 'ecfp2', 'ecfp4', 'ecfp6', "
+                "'maccs', 'rdkit', 'atom_pair' and 'topological_torsion'."
             )
 
 
@@ -325,7 +318,9 @@ def is_pains(mol: Chem.rdchem.Mol) -> bool:
     return catalog.HasMatch(mol)
 
 
-def read_mols(file: str, multithreaded=False) -> Generator[Chem.rdchem.Mol, None, None]:
+def read_mols(
+    file: str, *, multithreaded=False
+) -> Generator[Chem.rdchem.Mol, None, None]:
     """Read molecules from a file
 
     Parameters
@@ -342,7 +337,8 @@ def read_mols(file: str, multithreaded=False) -> Generator[Chem.rdchem.Mol, None
 
     Notes
     -----
-    Using multithreading and multiprocessing to read and process molecules from a file, so the order of the molecules may not be preserved.
+    The order of the molecules may not be preserved if `multithreaded` is True.
+    In some cases, the multithreading may cause the program not to respond.
     """
 
     # Get the file extension
@@ -370,7 +366,7 @@ def read_mols(file: str, multithreaded=False) -> Generator[Chem.rdchem.Mol, None
                 (
                     mol
                     for mol in Chem.MultithreadedSDMolSupplier(
-                        gzip.open(file),
+                        gzip.open(file),  # type: ignore
                         numWriterThreads=thread_num,
                         sizeInputQueue=queue_size,
                         sizeOutputQueue=queue_size,
@@ -380,7 +376,7 @@ def read_mols(file: str, multithreaded=False) -> Generator[Chem.rdchem.Mol, None
                 if multithreaded
                 else (
                     mol
-                    for mol in Chem.SDMolSupplier(gzip.open(file))
+                    for mol in Chem.SDMolSupplier(gzip.open(file))  # type: ignore
                     if mol is not None
                 )
             )

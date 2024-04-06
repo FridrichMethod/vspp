@@ -146,7 +146,7 @@ def analyze_mol_info(
     logging.info("Start generating molecular information...")
 
     # Generate molecular information in parallel
-    with mp.Pool(mp.cpu_count() - 1) as pool:
+    with mp.Pool(mp.cpu_count()) as pool:
         mol_info = pool.starmap(
             _gen_mol_info,
             smart_tqdm(_star_args, total=len(_star_args), desc="Analyzing", unit="mol"),
