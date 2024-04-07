@@ -75,27 +75,24 @@ class SMIConverter:
 
         assert mol is not None, "Molecule is None."
 
-        if filt_descs(mol, self.filt):
-            smiles = Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
-            if mol.HasProp(self.prop):
-                title = f"{self.prefix}{mol.GetProp(self.prop)}"
-            else:
-                warn(f"{self.prop} is not found in the molecule.")
-                title = f"{self.prefix}Unidentified"
+        smiles = Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
+        if mol.HasProp(self.prop):
+            title = f"{self.prefix}{mol.GetProp(self.prop)}"
+        else:
+            warn(f"{self.prop} is not found in the molecule.")
+            title = f"{self.prefix}Unidentified"
+        self.smi_ttl.append((smiles, title))
+        self.num += 1
 
-            self.smi_ttl.append((smiles, title))
-            self.num += 1
-
-    @staticmethod
     async def _async_generate_mols(
-        file: str, q: asyncio.Queue, *, multithreaded: bool = False
+        self, file: str, q: asyncio.Queue, *, multithreaded: bool = False
     ) -> None:
         """Generate the molecules in the file asynchronously and put them in the queue"""
 
         for mol in smart_tqdm(
             read_mols(file, multithreaded=multithreaded), desc="Converting", unit="mol"
         ):
-            if mol is not None:
+            if (mol is not None) and filt_descs(mol, self.filt):
                 await q.put(mol)
 
         logging.info("All molecules are generated.")
@@ -116,7 +113,7 @@ class SMIConverter:
         q = asyncio.Queue()
 
         producer = asyncio.create_task(
-            SMIConverter._async_generate_mols(file, q, multithreaded=multithreaded)
+            self._async_generate_mols(file, q, multithreaded=multithreaded)
         )
         consumer = asyncio.create_task(self._async_process_mols(q))
 
@@ -168,7 +165,7 @@ class SMIConverter:
         for mol in smart_tqdm(
             read_mols(file, multithreaded=multithreaded), desc="Converting", unit="mol"
         ):
-            if mol is not None:
+            if (mol is not None) and filt_descs(mol, self.filt):
                 self._process_mols(mol)
 
         logging.info("%s molecules are successfully converted.", self.num)
