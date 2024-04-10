@@ -3,20 +3,20 @@ import asyncio
 import logging
 import multiprocessing as mp
 import os
-import queue
 from concurrent.futures import ThreadPoolExecutor
 from itertools import batched
 from typing import Self, Sequence
 from warnings import warn
 
 import nest_asyncio
+import pandas as pd
 from rdkit import Chem
 
-from vspp._utils import filt_descs, read_mols, smart_tqdm
+from vspp._utils import MolSupplier, filt_descs, smart_tqdm
 
 
-class SMIConverter:
-    """A class to convert a file to a .smi file"""
+class SmiConverter:
+    """A class to convert files to .smi files"""
 
     def __init__(
         self,
@@ -49,26 +49,6 @@ class SMIConverter:
         self.filt: dict[str, tuple[float, float]] = filt
 
         self.smi_ttl: list[tuple[str, str]] = []
-        self.num = 0
-
-    def __iter__(self) -> Self:
-        return self
-
-    def __next__(self) -> tuple[str, str]:
-        if self.num:
-            self.num -= 1
-            return self.smi_ttl.pop(0)
-        else:
-            raise StopIteration
-
-    def __len__(self) -> int:
-        return self.num
-
-    def __getitem__(self, index: int) -> tuple[str, str]:
-        return self.smi_ttl[index]
-
-    def __repr__(self) -> str:
-        return f"SMIConverter(prop={self.prop}, prefix={self.prefix}, filt={self.filt})"
 
     def _process_mols(self, mol: Chem.Mol) -> None:
         """Process a molecule"""
@@ -83,15 +63,16 @@ class SMIConverter:
             title = f"{self.prefix}Unidentified"
 
         self.smi_ttl.append((smiles, title))
-        self.num += 1
 
     async def _async_generate_mols(
-        self, file: str, q: asyncio.Queue, *, multithreaded: bool = False
+        self, file: str, q: asyncio.Queue, multithreaded: bool
     ) -> None:
         """Generate the molecules in the file asynchronously and put them in the queue"""
 
         for mol in smart_tqdm(
-            read_mols(file, multithreaded=multithreaded), desc="Converting", unit="mol"
+            MolSupplier(file, multithreaded=multithreaded),
+            desc="Converting",
+            unit="mol",
         ):
             if (mol is not None) and filt_descs(mol, self.filt):
                 await q.put(mol)
@@ -108,10 +89,10 @@ class SMIConverter:
 
         logging.info("All molecules are processed.")
 
-    async def _async_convert(self, file: str, *, multithreaded: bool = False) -> None:
+    async def _async_convert(self, file: str, multithreaded: bool) -> None:
         """Convert the file to a .smi file"""
 
-        q = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue()
 
         producer = asyncio.create_task(
             self._async_generate_mols(file, q, multithreaded=multithreaded)
@@ -121,14 +102,14 @@ class SMIConverter:
         await asyncio.gather(producer, consumer)
 
     def convert(
-        self, file: str, *, asynchronous: bool = False, multithreaded: bool = False
-    ) -> list[tuple[str, str]]:
+        self, *args: str, asynchronous: bool = False, multithreaded: bool = False
+    ) -> None:
         """Convert the file to a .smi file
 
         Parameters
         ----------
-        file : str
-            Path to the file to be converted
+        args : str
+            Path to the files to be converted
         asynchronous : bool, optional
             Whether to convert the file asynchronously, by default False
         multithreaded : bool, optional
@@ -136,25 +117,24 @@ class SMIConverter:
 
         Returns
         -------
-        list[tuple[str, str]]
-            A list of tuples of SMILES and titles of the molecules
+        None
         """
 
         if asynchronous:
             nest_asyncio.apply()
-            asyncio.run(self._async_convert(file, multithreaded=multithreaded))
+            for file in args:
+                asyncio.run(self._async_convert(file, multithreaded=multithreaded))
         else:
-            for mol in smart_tqdm(
-                read_mols(file, multithreaded=multithreaded),
-                desc="Converting",
-                unit="mol",
-            ):
-                if (mol is not None) and filt_descs(mol, self.filt):
-                    self._process_mols(mol)
+            for file in args:
+                for mol in smart_tqdm(
+                    MolSupplier(file, multithreaded=multithreaded),
+                    desc="Converting",
+                    unit="mol",
+                ):
+                    if (mol is not None) and filt_descs(mol, self.filt):
+                        self._process_mols(mol)
 
-        logging.info("%s molecules are successfully converted.", self.num)
-
-        return self.smi_ttl
+        logging.info("%s molecules are successfully converted.", len(self.smi_ttl))
 
     def deduplicate(self) -> None:
         """Deduplicate the molecules"""
@@ -170,10 +150,10 @@ class SMIConverter:
                 smiles_deduplicated.append((smiles, title))
 
         self.smi_ttl = smiles_deduplicated
-        self.num = len(self.smi_ttl)
 
         logging.info(
-            "SMILES and title are deduplicated. %d molecules are left.", self.num
+            "SMILES and title are deduplicated. %d molecules are left.",
+            len(self.smi_ttl),
         )
 
     def sort(self) -> None:
@@ -242,10 +222,9 @@ class SMIConverter:
             )
 
 
-def file2smi(
-    file: str,
+def files2smi(
+    *args: str,
     output_dir: str | None = None,
-    *,
     prop: str = "_Name",
     prefix: str = "",
     filt: dict[str, tuple[float, float]] | None = None,
@@ -259,10 +238,11 @@ def file2smi(
 
     Parameters
     ----------
-    file : str
-        Path to the file to be converted
+    args : str
+        Path to the files to be converted
     output_dir : str | None, optional
-        Path to the output directory, by default None, i.e., the same directory as the input file
+        Path to the output directory, by default None, 
+        i.e., the same directory as the first input file
     prop : str, optional
         The property of molecules, especially in .sdf files, to be used as the title,
         by default "_Name", i.e., the default name of the molecule
@@ -288,9 +268,9 @@ def file2smi(
     None
     """
 
-    smi_converter = SMIConverter(prop=prop, prefix=prefix, filt=filt)
+    smi_converter = SmiConverter(prop=prop, prefix=prefix, filt=filt)
 
-    smi_converter.convert(file, asynchronous=asynchronous, multithreaded=multithreaded)
+    smi_converter.convert(*args, asynchronous=asynchronous, multithreaded=multithreaded)
 
     if deduplicate:
         smi_converter.deduplicate()
@@ -298,7 +278,7 @@ def file2smi(
         smi_converter.sort()
 
     if output_dir is None:
-        output_dir = os.path.dirname(file)
+        output_dir = os.path.dirname(args[0])
     smi_converter.write(output_dir, batch_size)
 
 
@@ -310,8 +290,14 @@ def main():
     None
     """
 
-    parser = argparse.ArgumentParser(description="Convert a file to a .smi file")
-    parser.add_argument("input_file", help="Path to the input file")
+    parser = argparse.ArgumentParser(description="Convert files to .smi files")
+    parser.add_argument("input_files", nargs="+", help="Input files path")
+    parser.add_argument(
+        "-o",
+        "--output_dir",
+        help="Output directory path",
+        default=None,
+    )
     parser.add_argument(
         "-p",
         "--prop",
@@ -328,6 +314,7 @@ def main():
         "-f",
         "--filt",
         help="The filter to be applied to the descriptors",
+        type=str,
         nargs="+",
         default=None,
     )
@@ -371,8 +358,9 @@ def main():
         )
     )
 
-    file2smi(
-        args.input_file,
+    files2smi(
+        *args.input_files,
+        output_dir=args.output_dir,
         prop=args.prop,
         prefix=args.prefix,
         filt=filt,

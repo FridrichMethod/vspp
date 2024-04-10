@@ -1,17 +1,19 @@
 import gzip
 import os
-from typing import Callable, Generator, Iterable, Sequence, Unpack
+from typing import Any, Callable, Generator, Iterable, Self, Sequence
 from warnings import warn
 
 import numpy as np
 import pandas as pd
 from PIL import Image
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog
+from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog, PandasTools
 from rdkit.ML.Cluster import Butina
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from tqdm import tqdm
 from tqdm.notebook import tqdm as tqdm_notebook
+
+type FingerPrint = DataStructs.cDataStructs.ExplicitBitVect
 
 DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
@@ -27,51 +29,201 @@ DESC_NAMES: tuple[str, ...] = (
     "qed",
 )
 
-SIM_FUNCS: dict[str, Callable] = {
-    name.lower(): func for name, func, _ in DataStructs.similarityFunctions
-}
+SIM_FUNCS: dict[
+    str,
+    Callable[[FingerPrint, FingerPrint], float],
+] = {name.lower(): func for name, func, _ in DataStructs.similarityFunctions}
+
+
+class MolSupplier:
+    """Read and yield molecules from a file
+
+    This class is a wrapper of RDKit's MolSupplier classes,
+    which support multithreading and will skip empty molecules.
+
+    Recommended for large files to avoid memory issues;
+    please directly use rdkit.Chem.PandasTools for small files and .csv/.xlsx/.xls files.
+
+    Attributes
+    ----------
+    file : str
+        Path to the input file
+    extension : str
+        File extension
+    multithreaded : bool
+        Whether to use multithreading
+    thread_num : int
+        Number of threads
+    queue_size : int
+        Size of the queue
+
+    Methods
+    -------
+    __next__()
+        Return the next molecule and skip empty molecules
+
+    Raises
+    ------
+    TypeError
+        If the file format is not supported
+        or multithreading is not supported for the given file format
+
+    Examples
+    --------
+    >>> supplier = MolSupplier("molecules.sdf")
+    >>> for mol in supplier:
+    ...     print(mol)
+
+    Notes
+    -----
+    The order of the molecules is not guaranteed when using multithreading.
+    """
+
+    _THREAD_NUM: int = 0
+    _QUEUE_SIZE: int = 1000
+
+    def __init__(self, file: str, *, multithreaded=False) -> None:
+
+        match os.path.splitext(file)[1].lower(), multithreaded:
+            case ".sdf", False:
+                self.mol_supplier = Chem.SDMolSupplier(file)
+            case ".sdf", True:
+                self.mol_supplier = Chem.MultithreadedSDMolSupplier(
+                    file,
+                    numWriterThreads=self._THREAD_NUM,
+                    sizeInputQueue=self._QUEUE_SIZE,
+                    sizeOutputQueue=self._QUEUE_SIZE,
+                )
+            case ".sdfgz", False:
+                self.mol_supplier = Chem.SDMolSupplier(gzip.open(file))
+            case ".sdfgz", True:
+                self.mol_supplier = Chem.MultithreadedSDMolSupplier(
+                    gzip.open(file),
+                    numWriterThreads=self._THREAD_NUM,
+                    sizeInputQueue=self._QUEUE_SIZE,
+                    sizeOutputQueue=self._QUEUE_SIZE,
+                )
+            case ".mae", False:
+                self.mol_supplier = Chem.MaeMolSupplier(file)
+            case ".mae", True:
+                raise TypeError("Multithreading is not supported for .mae files.")
+            case ".maegz", False:
+                self.mol_supplier = Chem.MaeMolSupplier(gzip.open(file))
+            case ".maegz", True:
+                raise TypeError("Multithreading is not supported for .maegz files.")
+            case ".smi", False:
+                self.mol_supplier = Chem.SmilesMolSupplier(file)
+            case ".smi", True:
+                self.mol_supplier = Chem.MultithreadedSmilesMolSupplier(
+                    file,
+                    numWriterThreads=self._THREAD_NUM,
+                    sizeInputQueue=self._QUEUE_SIZE,
+                    sizeOutputQueue=self._QUEUE_SIZE,
+                )
+            case _:
+                raise TypeError("Should be a .sdf, .sdfgz, .mae, .maegz or .smi file.")
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> Chem.rdchem.Mol:
+        """Return the next molecule and skip empty molecules"""
+
+        while True:
+            if (mol := next(self.mol_supplier)) is not None:
+                return mol
+            warn("Empty molecule is skipped.", RuntimeWarning)
+
+
+def calc_bulk_sim(
+    fp: FingerPrint,
+    fps: Sequence[FingerPrint],
+    similarity_metric: str = "tanimoto",
+) -> list[float]:
+    """Calculate similarity between a fingerprint and a list of fingerprints
+
+    Parameters
+    ----------
+    fp : rdkit.DataStructs.cDataStructs.ExplicitBitVect
+        A fingerprint
+    fps : Sequence[rdkit.DataStructs.cDataStructs.ExplicitBitVect]
+        A list of fingerprints
+    similarity_metric : str, optional
+        Similarity metric, by default 'tanimoto'
+
+    Returns
+    -------
+    similarities : list[float]
+        Similarities between the fingerprint and a list of fingerprints
+    """
+
+    match similarity_metric:
+        case "tanimoto":
+            return DataStructs.cDataStructs.BulkTanimotoSimilarity(fp, fps)
+        case "dice":
+            return DataStructs.cDataStructs.BulkDiceSimilarity(fp, fps)
+        case "cosine":
+            return DataStructs.cDataStructs.BulkCosineSimilarity(fp, fps)
+        case "sokal":
+            return DataStructs.cDataStructs.BulkSokalSimilarity(fp, fps)
+        case "russel":
+            return DataStructs.cDataStructs.BulkRusselSimilarity(fp, fps)
+        case "rogotgoldberg":
+            return DataStructs.cDataStructs.BulkRogotGoldbergSimilarity(fp, fps)
+        case "allbit":
+            return DataStructs.cDataStructs.BulkAllBitSimilarity(fp, fps)
+        case "kulczynski":
+            return DataStructs.cDataStructs.BulkKulczynskiSimilarity(fp, fps)
+        case "mcconnaughey":
+            return DataStructs.cDataStructs.BulkMcConnaugheySimilarity(fp, fps)
+        case "asymmetric":
+            return DataStructs.cDataStructs.BulkAsymmetricSimilarity(fp, fps)
+        case "braunblanquet":
+            return DataStructs.cDataStructs.BulkBraunBlanquetSimilarity(fp, fps)
+        case _:
+            raise ValueError(
+                "similarity_metric should be one of 'tanimoto', 'dice', 'cosine', 'sokal', 'russel', 'rogotgoldberg', 'allbit', 'kulczynski', 'mcconnaughey', 'asymmetric', 'braunblanquet'."
+            )
 
 
 def calc_descs(
     mol: Chem.rdchem.Mol,
-    desc_names: Sequence[str] | str = DESC_NAMES,
-) -> tuple[float] | float:
+    *args: str,
+) -> float | tuple[float, ...]:
     """Calculate molecular descriptors
 
     Parameters
     ----------
     mol : rdkit.Chem.rdchem.Mol
         A molecule
-    desc_names : Sequence[str] | str, optional
-        A list of descriptor names, by default `DESC_NAMES`, or a string of descriptor name.
+    args : str
+        A single descriptor name or descriptor names, by default `DESC_NAMES`.
 
     Returns
     -------
-    descriptors : tuple[float] | float
-        A list of molecular descriptors, or a single descriptor value
-        `MolWt`, `MolLogP`, `NumHAcceptors` and `NumHDonors` are lipinski`s rule of five descriptors;
+    descriptors : float | tuple[float, ...]
+        A single descriptor value or molecular descriptors.
+        `MolWt`, `MolLogP`, `NumHAcceptors` and `NumHDonors` are `lipinski`s rule of five descriptors;
         `FractionCSP3`, `NumRotatableBonds`, `RingCount`, `TPSA` and `qed` are other common descriptors.
     """
 
-    if isinstance(desc_names, str):
-        if desc_names not in DEFAULT_DESC_NAMES:
-            raise KeyError(f"Descriptor name should be in {DEFAULT_DESC_NAMES}.")
-        # Directly pass a string to desc_names will cause every character to be a "descriptor name"
-        # and return a tuple of interger 777 for UNKNOWN reasons
-        calc = MoleculeDescriptors.MolecularDescriptorCalculator((desc_names,))
-        return calc.CalcDescriptors(mol)[0]
-    elif isinstance(desc_names, Sequence):
-        if invalid_filter_keys := set(desc_names) - set(DEFAULT_DESC_NAMES):
-            raise KeyError(f"Invalid descriptor names: {invalid_filter_keys}")
-        calc = MoleculeDescriptors.MolecularDescriptorCalculator(desc_names)
-        return calc.CalcDescriptors(mol)
-    else:
-        assert False, "Descriptor names should be a string or a sequence of strings."
+    desc_names = args or DESC_NAMES
+    if invalid_filter_keys := set(desc_names) - set(DEFAULT_DESC_NAMES):
+        raise KeyError(f"Invalid descriptor names: {invalid_filter_keys}")
+    calc = MoleculeDescriptors.MolecularDescriptorCalculator(desc_names)
+
+    # Directly pass a string to desc_names will cause every character to be a "descriptor name"
+    # and return a tuple of interger 777 for UNKNOWN reasons
+    return (
+        calc.CalcDescriptors(mol)
+        if len(desc_names) > 1
+        else calc.CalcDescriptors(mol)[0]
+    )
 
 
 def calc_sim(
-    fp1: DataStructs.cDataStructs.ExplicitBitVect,
-    fp2: DataStructs.cDataStructs.ExplicitBitVect,
+    fp1: FingerPrint,
+    fp2: FingerPrint,
     similarity_metric: str = "tanimoto",
 ) -> float:
     """Calculate similarity between two fingerprints
@@ -93,7 +245,7 @@ def calc_sim(
 
     if similarity_metric not in SIM_FUNCS:
         raise ValueError(
-            "similarity_metric should be one of 'tanimoto', 'dice', 'cosine', 'sokal', 'russel', 'kulczynski', 'mcconnaughey', 'tversky' and 'asymmetric'."
+            "similarity_metric should be one of 'tanimoto', 'dice', 'cosine', 'sokal', 'russel', 'rogotgoldberg', 'allbit', 'kulczynski', 'mcconnaughey', 'asymmetric', 'braunblanquet'."
         )
 
     return DataStructs.FingerprintSimilarity(
@@ -102,7 +254,7 @@ def calc_sim(
 
 
 def cluster_fps(
-    fps: list[DataStructs.cDataStructs.ExplicitBitVect],
+    fps: Sequence[FingerPrint],
     cutoff: float = 0.6,
     similarity_metric: str = "tanimoto",
 ) -> list[tuple[int, ...]]:
@@ -110,7 +262,7 @@ def cluster_fps(
 
     Parameters
     ----------
-    fps : list[rdkit.DataStructs.cDataStructs.ExplicitBitVect]
+    fps : Sequence[rdkit.DataStructs.cDataStructs.ExplicitBitVect]
         A list of Morgan fingerprints
     cutoff : float, optional
         Tanimoto similarity cutoff, by default 0.6
@@ -124,7 +276,7 @@ def cluster_fps(
     nfps = len(fps)
     # Calculate the distance matrix
     distances = [
-        1 - calc_sim(fps[i], fps[j], similarity_metric=similarity_metric)
+        1 - calc_sim(fps[i], fps[j], similarity_metric)
         for i in range(nfps)
         for j in range(i)
     ]
@@ -137,11 +289,11 @@ def cluster_fps(
     return clusters
 
 
-def draw_structures(
-    mols: list[Chem.rdchem.Mol],
+def draw_mols(
+    mols: Sequence[Chem.rdchem.Mol],
     output_file: str | None = None,
     *,
-    legends: list[str] | None = None,
+    legends: Sequence[str] | None = None,
     pattern: Chem.rdchem.Mol | None = None,
     mols_per_row: int = 8,
     sub_img_size: tuple[float, float] = (300, 300),
@@ -150,11 +302,11 @@ def draw_structures(
 
     Parameters
     ----------
-    mols : list[rdkit.Chem.rdchem.Mol]
+    mols : Sequence[rdkit.Chem.rdchem.Mol]
         A list of molecules
     output_file : str | None, optional
         Path to the output file, by default None
-    legends : list[str] | None, optional
+    legends : Sequence[str] | None, optional
         A list of legends, by default None
     pattern : Chem.rdchem.Mol | None, optional
         SMARTS pattern to align and highlight the substructure, by default None
@@ -228,7 +380,7 @@ def draw_structures(
 def filt_descs(
     mol: Chem.rdchem.Mol,
     filt: dict[str, tuple[float, float]],
-) -> bool:
+) -> bool | np.bool_:
     """Filter the molecules based on the descriptors
 
     Parameters
@@ -247,16 +399,16 @@ def filt_descs(
     if not filt:
         return True
 
-    descs = np.array(calc_descs(mol, list(filt.keys())))  # type: ignore
+    descs = np.array(calc_descs(mol, *filt.keys()))
     bounds = np.array(list(filt.values()))
 
-    return bool(np.all((bounds[:, 0] <= descs) & (descs <= bounds[:, 1])))
+    return np.all((bounds[:, 0] <= descs) & (descs <= bounds[:, 1]))
 
 
 def gen_fp(
     mol: Chem.rdchem.Mol,
     fp_type: str = "morgan",
-) -> DataStructs.cDataStructs.ExplicitBitVect:
+) -> FingerPrint:
     """Generate molecular fingerprints
 
     Parameters
@@ -316,114 +468,6 @@ def is_pains(mol: Chem.rdchem.Mol) -> bool:
     params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS)
     catalog = FilterCatalog.FilterCatalog(params)
     return catalog.HasMatch(mol)
-
-
-def read_mols(
-    file: str, *, multithreaded=False
-) -> Generator[Chem.rdchem.Mol, None, None]:
-    """Read molecules from a file
-
-    Parameters
-    ----------
-    file : str
-        Path to the file, which can be a .sdf, .sdfgz, .mae, .maegz, .smi, .csv, .xlsx or .xls file.
-    multithreaded : bool, optional
-        Whether to use multithreading, by default False
-
-    Returns
-    -------
-    mol_gen : Generator[rdkit.Chem.rdchem.Mol, None, None]
-        A generator of molecules
-
-    Notes
-    -----
-    The order of the molecules may not be preserved if `multithreaded` is True.
-    In some cases, the multithreading may cause the program not to respond.
-    """
-
-    # Get the file extension
-    ext = os.path.splitext(file)[1].lower()
-    thread_num = 0
-    queue_size = 1000
-    match ext:
-        case ".sdf":
-            return (
-                (
-                    mol
-                    for mol in Chem.MultithreadedSDMolSupplier(
-                        file,
-                        numWriterThreads=thread_num,
-                        sizeInputQueue=queue_size,
-                        sizeOutputQueue=queue_size,
-                    )
-                    if mol is not None
-                )
-                if multithreaded
-                else (mol for mol in Chem.SDMolSupplier(file) if mol is not None)
-            )
-        case ".sdfgz":
-            return (
-                (
-                    mol
-                    for mol in Chem.MultithreadedSDMolSupplier(
-                        gzip.open(file),  # type: ignore
-                        numWriterThreads=thread_num,
-                        sizeInputQueue=queue_size,
-                        sizeOutputQueue=queue_size,
-                    )
-                    if mol is not None
-                )
-                if multithreaded
-                else (
-                    mol
-                    for mol in Chem.SDMolSupplier(gzip.open(file))  # type: ignore
-                    if mol is not None
-                )
-            )
-        case ".mae":
-            return (mol for mol in Chem.MaeMolSupplier(file) if mol is not None)
-        case ".maegz":
-            return (
-                mol for mol in Chem.MaeMolSupplier(gzip.open(file)) if mol is not None
-            )
-        case ".smi":
-            return (
-                (
-                    mol
-                    for mol in Chem.MultithreadedSmilesMolSupplier(
-                        file,
-                        numWriterThreads=thread_num,
-                        sizeInputQueue=queue_size,
-                        sizeOutputQueue=queue_size,
-                    )
-                    if mol is not None
-                )
-                if multithreaded
-                else (mol for mol in Chem.SmilesMolSupplier(file) if mol is not None)
-            )
-        case ".csv" | ".xlsx" | ".xls":
-            df = pd.read_csv(file) if ext == ".csv" else pd.read_excel(file)
-
-            def _process_df_row(row: pd.Series) -> Chem.rdchem.Mol:
-                """Process a row of a dataframe to a molecule"""
-
-                mol = Chem.MolFromSmiles(row["smiles"])
-                mol.SetProp("_Name", row["title"])
-
-                for prop, value in row.drop(["smiles", "title"]).items():
-                    mol.SetProp(str(prop), str(value))
-
-                return mol
-
-            return (
-                mol
-                for _, row in df.iterrows()
-                if (mol := _process_df_row(row)) is not None
-            )
-        case _:
-            raise TypeError(
-                "Should be a .sdf, .sdfgz, .mae, .maegz, .smi, .csv, .xlsx or .xls file."
-            )
 
 
 def smart_tqdm(iterable: Iterable, *args, **kwargs) -> tqdm | tqdm_notebook:

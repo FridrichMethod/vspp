@@ -3,11 +3,21 @@ import logging
 import multiprocessing as mp
 import os
 import re
+from typing import Any
 
 import pandas as pd
 from rdkit import Chem, DataStructs
 
-from vspp._utils import calc_descs, cluster_fps, gen_fp, is_pains, read_mols, smart_tqdm
+from vspp._utils import (
+    MolSupplier,
+    calc_descs,
+    cluster_fps,
+    gen_fp,
+    is_pains,
+    smart_tqdm,
+)
+
+type FingerPrint = DataStructs.cDataStructs.ExplicitBitVect
 
 
 def _mmgbsa_dict(mmgbsa_txt: str) -> dict[str, float]:
@@ -50,7 +60,7 @@ def _gen_mol_info(
     mmgbsa_score: float,
     phase_score: float,
     fp_type: str,
-) -> tuple[DataStructs.cDataStructs.ExplicitBitVect, list]:
+) -> tuple[FingerPrint, list[Any]]:
     """Generate molecular information
 
     Parameters
@@ -127,7 +137,7 @@ def analyze_mol_info(
         A dataframe containing molecular information.
     """
 
-    phase_suppl = read_mols(phase_maegz)
+    phase_suppl = MolSupplier(phase_maegz)
     mmgbsa_d = _mmgbsa_dict(mmgbsa_txt)
 
     _star_args = [
