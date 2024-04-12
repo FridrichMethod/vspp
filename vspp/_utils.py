@@ -120,6 +120,9 @@ class MolSupplier:
                     sizeInputQueue=self._QUEUE_SIZE,
                     sizeOutputQueue=self._QUEUE_SIZE,
                 )
+            case ".smr", False:
+                with open(file, "r", encoding="utf-8") as f:
+                    self.mol_supplier = (Chem.MolFromSmarts(line) for line in f)
             case _:
                 raise TypeError("Should be a .sdf, .sdfgz, .mae, .maegz or .smi file.")
 

@@ -105,15 +105,21 @@ class SmiExtractor:
             ignore_index=True,
         )
 
+        logging.info("All .smi files are successfully loaded.")
+
         if df.empty:
             warn(
                 "At least one non-empty .smi file should be provided; "
                 "other file formats are ignored."
             )
 
+        logging.info("Start generating molecular structures...")
+
         PandasTools.AddMoleculeColumnToFrame(
             df, smilesCol="smiles", molCol="mol", includeFingerprints=True
         )
+
+        logging.info("Molecular structures are successfully generated.")
 
         df = df.dropna(subset="mol").reset_index(drop=True)
 
@@ -152,6 +158,8 @@ class SmiExtractor:
             - druglikeness: Drug-likeness score
         """
 
+        logging.info("Start generating molecular information...")
+
         df["pains"] = df["mol"].apply(is_pains)
         df[
             [
@@ -169,13 +177,15 @@ class SmiExtractor:
             df["mol"].apply(calc_descs).apply(pd.Series)
         )
 
+        logging.info("Molecular information is successfully generated.")
+
         return df
 
     def extract(
         self,
         *args: str,
-        queries: Sequence[Chem.rdchem.Mol] | None = None,
-        patterns: Sequence[Chem.rdchem.Mol] | None = None,
+        queries: Sequence[Chem.rdchem.Mol] = (),
+        patterns: Sequence[Chem.rdchem.Mol] = (),
         cutoff: float = 0.8,
         fp_type: str = "topological_torsion",
         similarity_metric: str = "dice",
@@ -186,10 +196,10 @@ class SmiExtractor:
         ----------
         args : str
             Path to the .smi files
-        queries : list, optional
-            A list of molecule queries, by default None
-        patterns : list, optional
-            A list of substructure patterns, by default None
+        queries : Sequence[Chem.rdchem.Mol], optional
+            A list of molecule queries, by default an empty tuple
+        patterns : Sequence[Chem.rdchem.Mol], optional
+            A list of substructure patterns, by default an empty tuple
         cutoff : float, optional
             Similarity cutoff for extraction, by default 0.8
         fp_type : str, optional
@@ -205,8 +215,8 @@ class SmiExtractor:
         # Read the .smi files
         df = self.read_smi(*args)
 
-        if queries is not None:
-            queries = [query for query in queries if query is not None]
+        queries = [query for query in queries if query is not None]
+        if queries:
             queries_title = [query.GetProp("_Name") for query in queries]
             queries_fps = [gen_fp(query, fp_type) for query in queries]
 
@@ -218,6 +228,8 @@ class SmiExtractor:
                 .apply(pd.Series)
             )
 
+            logging.info("Similarity calculation is successfully completed.")
+
             # Extract similar structures
             df["query_title"] = df[queries_title].idxmax(axis=1)
             df["similarity"] = df[queries_title].max(axis=1)
@@ -226,14 +238,16 @@ class SmiExtractor:
             # Drop the query columns
             df = df.drop(columns=queries_title)
 
-        if patterns is not None:
-            patterns = [pattern for pattern in patterns if pattern is not None]
+        patterns = [pattern for pattern in patterns if pattern is not None]
+        if patterns:
             patterns_smarts = [Chem.MolToSmarts(pattern) for pattern in patterns]
 
             # Substructure matching
             df[patterns_smarts] = (
                 df["mol"].to_numpy() >= np.array(patterns).reshape(-1, 1)
             ).T
+
+            logging.info("Substructure matching is successfully completed.")
 
             # Extract match structures
             df = df[df[patterns_smarts].any(axis=1)].reset_index(drop=True)
@@ -248,8 +262,13 @@ class SmiExtractor:
         if df.empty:
             warn("No structures are extracted this time.")
 
-        # Concatenate the dataframes
-        self.structs = pd.concat([self.structs, df], ignore_index=True)
+        # Concatenate the dataframes (inner join)
+        if self.structs.empty:
+            self.structs = df
+        else:
+            self.structs = pd.concat([self.structs, df], ignore_index=True, join="inner")
+
+        assert self.structs.notna().all().all()
 
         if self.structs.empty:
             warn("No structures are extracted yet.")
@@ -258,6 +277,8 @@ class SmiExtractor:
         """Deduplicate the structures"""
 
         self.structs = self.structs.drop_duplicates(subset="smiles", ignore_index=True)
+
+        logging.info("Deduplication is successfully completed.")
 
     def sort(self) -> None:
         """Sort the structures"""
@@ -278,6 +299,8 @@ class SmiExtractor:
             ascending=ascending,
             ignore_index=True,
         )
+
+        logging.info("Sorting is successfully completed.")
 
     def cluster(
         self,
@@ -308,6 +331,8 @@ class SmiExtractor:
 
         fps = self.structs["mol"].apply(gen_fp, fp_type=fp_type).to_list()
         clusters = cluster_fps(fps, cutoff, similarity_metric)
+        logging.info("Clustering is successfully completed.")
+
         columns = ["cluster_id", "cluster_size", "cluster_centroid"]
 
         df = pd.DataFrame.from_dict(
@@ -355,7 +380,7 @@ class SmiExtractor:
                     self.structs,
                     os.path.join(output_dir, "structs.xlsx"),
                     molCol="mol",
-                    size=(300, 300),
+                    size=(150, 150),
                 )
                 logging.info("Write structs.xlsx")
             case "structs", False:
@@ -371,7 +396,7 @@ class SmiExtractor:
                         group,
                         os.path.join(output_dir, f"{title}.xlsx"),
                         molCol="mol",
-                        size=(300, 300),
+                        size=(150, 150),
                     )
                     logging.info("Write %s.xlsx", title)
             case "query", False:
@@ -390,7 +415,7 @@ class SmiExtractor:
                         group,
                         os.path.join(output_dir, f"{smarts}.xlsx"),
                         molCol="mol",
-                        size=(300, 300),
+                        size=(150, 150),
                     )
                     logging.info("Write %s.xlsx", smarts)
             case "pattern", False:
@@ -457,7 +482,7 @@ class SmiExtractor:
             case "query", True:
                 if "query_title" not in self.structs.columns:
                     raise ValueError("No query information is available.")
-                if "cluster_centroid" in self.structs.columns:
+                if "cluster_centroid" not in self.structs.columns:
                     raise ValueError("No cluster information is available.")
                 for title, group in self.structs.groupby("query_title"):
                     group_centroid = group[group["cluster_centroid"]]
@@ -496,7 +521,7 @@ class SmiExtractor:
             case "pattern", True:
                 if "pattern_smarts" not in self.structs.columns:
                     raise ValueError("No pattern information is available.")
-                if "cluster_centroid" in self.structs.columns:
+                if "cluster_centroid" not in self.structs.columns:
                     raise ValueError("No cluster information is available.")
                 for smarts, group in self.structs.groupby("pattern_smarts"):
                     group_centroid = group[group["cluster_centroid"]]
@@ -526,7 +551,7 @@ def extract_smistructs(
     *args: str,
     output_dir: str | None = None,
     queries_file: str | None = None,
-    patterns_file: str | None = None,
+    patterns_smarts: Sequence[str] = (),
     extract_cutoff: float = 0.8,
     extract_fp_type: str = "topological_torsion",
     extract_similarity_metric: str = "dice",
@@ -549,8 +574,8 @@ def extract_smistructs(
         i.e., the same directory as the first input files
     queries_file : str, optional
         Path to the queries file, by default None
-    patterns_file : str, optional
-        Path to the patterns file, by default None
+    patterns_smarts : Sequence[str], optional
+        A list of substructure SMARTS patterns, by default an empty tuple
     extract_cutoff : float, optional
         Similarity cutoff for extraction, by default 0.8
     extract_fp_type : str, optional
@@ -577,10 +602,16 @@ def extract_smistructs(
     None
     """
 
-    if queries_file is not None:
-        queries = [mol for mol in MolSupplier(queries_file) if mol is not None]
-    if patterns_file is not None:
-        patterns = [mol for mol in MolSupplier(patterns_file) if mol is not None]
+    if queries_file is None:
+        queries = []
+    else:
+        queries = [query for query in MolSupplier(queries_file) if query is not None]
+
+    patterns = [
+        pattern
+        for smarts in patterns_smarts
+        if (pattern := Chem.MolFromSmarts(smarts)) is not None
+    ]
 
     smi_extractor = SmiExtractor()
 
