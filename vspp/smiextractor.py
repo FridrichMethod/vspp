@@ -1,174 +1,153 @@
 import argparse
 import logging
+import multiprocessing as mp
 import os
-from typing import Any, Literal, Sequence, Unpack
-from warnings import warn
+from typing import Any
 
-import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
 from vspp._utils import (
-    MolSupplier,
-    calc_bulk_sim,
     calc_descs,
+    calc_sim,
     cluster_fps,
     draw_mols,
     gen_fp,
     is_pains,
+    smart_tqdm,
 )
 
 
-class SmiExtractor:
-    """Extract similar and matched structures from .smi files
+class SimExtractor:
+    """A class to extract similar structures from a compound library"""
 
-    Attributes
-    ----------
-    structs : pandas.DataFrame
-        A dataframe containing molecular structures
-
-    Methods
-    -------
-    read_smi(*args: str) -> pandas.DataFrame
-        Read .smi files
-    gen_info(df: pandas.DataFrame) -> pandas.DataFrame
-        Generate molecular information
-    extract(
-        *args: str,
-        queries: Sequence[Chem.rdchem.Mol] | None = None,
-        patterns: Sequence[Chem.rdchem.Mol] | None = None,
+    def __init__(
+        self,
+        query: Chem.rdchem.Mol,
+        *,
         cutoff: float = 0.8,
+        upper_cutoff: float = 1.0,
         fp_type: str = "topological_torsion",
         similarity_metric: str = "dice",
-    ) -> None
-        Extract similar and matched structures
-    deduplicate() -> None
-        Deduplicate the structures
-    sort() -> None
-        Sort the structures
-    cluster(
-        cutoff: float = 0.6,
-        fp_type: str = "morgan",
-        similarity_metric: str = "tanimoto",
-    ) -> None
-        Cluster the structures
-    write(
-        output_dir: str,
-        by: Literal["structs", "query", "pattern"] = "structs",
-        xlsx: bool = False,
-    ) -> None
-        Write the output files
-    draw(
-        output_dir: str,
-        by: Literal["structs", "query", "pattern"] = "structs",
-        centroid: bool = False,
-        **kwargs: Any,
-    ) -> None
-        Draw 2D structures
-    """
+    ) -> None:
+        """Initialize the SimExtractor
 
-    def __init__(self) -> None:
-        """Initialize the SmiExtractor object"""
+        Parameters
+        ----------
+        query : rdkit.Chem.rdchem.Mol
+            A query molecule
+        cutoff : float, optional
+            Dice similarity cutoff, by default 0.8
+        upper_cutoff : float, optional
+            Upper cutoff for similarity, by default 1.0
+        fp_type : str, optional
+            Fingerprint type, by default "topological_torsion"
+        similarity_metric : str, optional
+            Similarity metric, by default "dice"
+
+        Returns
+        -------
+        None
+        """
+
+        if query is None:
+            raise ValueError("The query molecule is invalid.")
+        self.query = query
+        self.query_title = query.GetProp("_Name")
+        self.query_fp = gen_fp(query, fp_type)
+
+        self.cutoff = cutoff
+        self.upper_cutoff = upper_cutoff
+        self.fp_type = fp_type
+        self.similarity_metric = similarity_metric
 
         self.structs: pd.DataFrame = pd.DataFrame()
 
-    @staticmethod
-    def read_smi(*args: str) -> pd.DataFrame:
-        """Read .smi files
+    def _compare_molecules(
+        self,
+        line: str,
+    ) -> list[Any]:
+        """Compare a query with a line of SMILES and title in a .smi file
 
         Parameters
         ----------
-        args : str
-            Path to the .smi files
+        line : str
+            A line of SMILES and title, separated by a space
 
         Returns
         -------
-        pandas.DataFrame
-            A dataframe containing molecular structures
-
-        Notes
-        -----
-        Only .smi files are read; other file formats are ignored.
-        Return dataframe columns:
-            - smiles: SMILES
-            - title: Title
-            - mol: RDKit molecule
+        struct_info : list[list[Any]]
+            A similar structure and its properties if any.
         """
 
-        df = pd.concat(
-            [
-                pd.read_csv(file, sep=" ", header=None, names=["smiles", "title"])
-                for file in args
-                if file.endswith(".smi")
-            ],
-            ignore_index=True,
-        )
+        mol = Chem.MolFromSmiles(line)
 
-        logging.info("All .smi files are successfully loaded.")
+        # It is possible that SMILES Parse Error occurs (by warning)
+        # if the SMILES is invalid (possibly due to the header in the .smi file)
+        if mol is None:
+            return []
+        fp = gen_fp(mol, self.fp_type)
 
-        if df.empty:
-            warn(
-                "At least one non-empty .smi file should be provided; "
-                "other file formats are ignored."
+        if (
+            self.upper_cutoff
+            > (similarity := calc_sim(fp, self.query_fp, self.similarity_metric))
+            > self.cutoff
+        ):
+            return [
+                mol.GetProp("_Name"),
+                Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True),
+                similarity,
+                is_pains(mol),
+                *calc_descs(mol),  # type: ignore
+            ]
+
+        return []
+
+    def extract(
+        self,
+        file: str,
+    ) -> None:
+        """Extract similar structures from a compound library
+
+        Parameters
+        ----------
+        file : str
+            Path to the compound file, should be a .smi file, with or without a header.
+            Module `vspp.smiconverter` could be used to convert files to .smi files.
+
+        Returns
+        -------
+        None
+        """
+
+        # Use `line`, `query_title` and `query_fps`
+        # instead of `query: rdkit.Chem.rdchem.Mol` to save memory
+        with open(file, "r", encoding="utf-8") as f:
+            _args = f.readlines()
+
+        # Compare molecules in parallel
+        logging.info("Start comparing molecules...")
+        with mp.Pool(mp.cpu_count()) as pool:
+            data = pool.map(
+                self._compare_molecules,
+                smart_tqdm(
+                    _args,
+                    total=len(_args),
+                    desc="Comparing",
+                    unit="mol",
+                ),
             )
+        logging.info("Molecules are extracted!")
 
-        logging.info("Start generating molecular structures...")
-
-        PandasTools.AddMoleculeColumnToFrame(
-            df, smilesCol="smiles", molCol="mol", includeFingerprints=True
-        )
-
-        logging.info("Molecular structures are successfully generated.")
-
-        df = df.dropna(subset="mol").reset_index(drop=True)
-
-        df["smiles"] = df["mol"].apply(
-            Chem.MolToSmiles, canonical=True, isomericSmiles=True
-        )
-
-        return df
-
-    @staticmethod
-    def gen_info(df: pd.DataFrame) -> pd.DataFrame:
-        """Generate molecular information
-
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            A dataframe containing molecular structures
-
-        Returns
-        -------
-        pandas.DataFrame
-            A dataframe containing molecular information
-
-        Notes
-        -----
-        The following columns are added:
-            - pains: PAINS alert
-            - mol_wt: Molecular weight
-            - log_p: LogP
-            - h_acc: Hydrogen bond acceptor count
-            - h_don: Hydrogen bond donor count
-            - fsp3: Fraction of sp3 carbons
-            - rot_bond: Rotatable bond count
-            - ring_count: Ring count
-            - tpsa: Topological polar surface area
-            - druglikeness: Drug-likeness score
-        """
-
-        logging.info("Start generating molecular information...")
-
-        if df.empty:
-            warn("No molecular structures are provided.")
-            return df
-
-        df_copy = df.copy()
-
-        df_copy["pains"] = df_copy["mol"].apply(is_pains)
-        df_copy[
-            [
+        # Write the output file
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "title",
+                "smiles",
+                "similarity",
+                "pains",
                 "mol_wt",
                 "log_p",
                 "h_acc",
@@ -178,133 +157,192 @@ class SmiExtractor:
                 "ring_count",
                 "tpsa",
                 "druglikeness",
-            ]
-        ] = (
-            df_copy["mol"].apply(calc_descs).apply(pd.Series)
-        )
+            ],
+        ).dropna()
 
-        logging.info("Molecular information is successfully generated.")
+        self.structs = df.sort_values(
+            by=["similarity", "title"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
 
-        return df_copy
-
-    def extract(
-        self,
-        *args: str,
-        queries: Sequence[Chem.rdchem.Mol] = (),
-        patterns: Sequence[Chem.rdchem.Mol] = (),
-        cutoff: float = 0.8,
-        fp_type: str = "topological_torsion",
-        similarity_metric: str = "dice",
-    ) -> None:
-        """Extract similar and matched structures
+    def write(self, output_dir: str, xlsx: bool = True) -> None:
+        """Write the output files and draw structures
 
         Parameters
         ----------
-        args : str
-            Path to the .smi files
-        queries : Sequence[Chem.rdchem.Mol], optional
-            A list of molecule queries, by default an empty tuple
-        patterns : Sequence[Chem.rdchem.Mol], optional
-            A list of substructure patterns, by default an empty tuple
-        cutoff : float, optional
-            Similarity cutoff for extraction, by default 0.8
-        fp_type : str, optional
-            Fingerprint type for extraction, by default "topological_torsion"
-        similarity_metric : str, optional
-            Similarity metric for extraction, by default "dice"
+        output_dir : str
+            Path to the output directory
+        xlsx : bool, optional
+            Whether to write an Excel file, by default True
+        """
+
+        if self.structs.empty:
+            raise ValueError("No similar structures are extracted yet.")
+
+        os.makedirs(output_dir, exist_ok=True)
+        if xlsx:
+            PandasTools.AddMoleculeColumnToFrame(
+                self.structs, "smiles", "mol", includeFingerprints=True
+            )
+            PandasTools.SaveXlsxFromFrame(
+                self.structs,
+                os.path.join(output_dir, f"{self.query_title}.xlsx"),
+                molCol="mol",
+                size=(300, 300),
+            )
+            logging.info("Write %s.xlsx", self.query_title)
+        else:
+            self.structs.to_csv(
+                os.path.join(output_dir, f"{self.query_title}.csv"), index=False
+            )
+            logging.info("Write %s.csv", self.query_title)
+
+    def draw(self, output_dir: str, **kwargs) -> None:
+        """Draw structures
+
+        Parameters
+        ----------
+        output_dir : str
+            Path to the output directory
+        kwargs :
+            Other keyword arguments for `draw_mols`.
+        """
+
+        if self.structs.empty:
+            raise ValueError("No similar structures are extracted yet.")
+
+        os.makedirs(output_dir, exist_ok=True)
+        draw_mols(
+            self.structs["smiles"].apply(Chem.MolFromSmiles).to_list(),
+            os.path.join(output_dir, f"{self.query_title}.png"),
+            legends=[
+                " ".join(x)
+                for x in zip(
+                    self.structs["title"],
+                    self.structs["similarity"].apply(lambda x: f"{x:.3f}"),
+                )
+            ],
+            **kwargs,
+        )
+        logging.info("Draw %s.png", self.query_title)
+
+
+class MatExtractor:
+    """A class to extract match structures from a compound library"""
+
+    def __init__(
+        self,
+        pattern: Chem.rdchem.Mol,
+    ) -> None:
+        """Initialize the MatExtractor
+
+        Parameters
+        ----------
+        pattern : rdkit.Chem.rdchem.Mol
+            A SMARTS pattern
 
         Returns
         -------
         None
         """
 
-        # Read the .smi files
-        df = self.read_smi(*args)
+        if pattern is None:
+            raise ValueError("The pattern is invalid.")
+        self.pattern = pattern
+        self.smarts = Chem.MolToSmarts(pattern, isomericSmiles=True)
 
-        if queries := [query for query in queries if query is not None]:
-            queries_title = [query.GetProp("_Name") for query in queries]
-            queries_fps = [gen_fp(query, fp_type) for query in queries]
+        self.structs: pd.DataFrame = pd.DataFrame()
 
-            # Generate fingerprints and calculate similarities
-            df[queries_title] = (
-                df["mol"]
-                .apply(gen_fp, fp_type=fp_type)
-                .apply(calc_bulk_sim, args=(queries_fps, similarity_metric))
-                .apply(pd.Series)
+    def _compare_molecules(
+        self,
+        line: str,
+    ) -> list[Any]:
+        """Compare a pattern with a line of SMILES and title in a .smi file
+
+        Parameters
+        ----------
+        line : str
+            A line of SMILES and title, separated by a space
+
+        Returns
+        -------
+        struct_info : list[Any]
+            A match structure and its properties if any.
+        """
+
+        mol = Chem.MolFromSmiles(line)
+
+        # It is possible that SMILES Parse Error occurs (by warning)
+        # if the SMILES is invalid (possibly due to the header in the .smi file)
+        if mol is None:
+            return []
+
+        if mol.HasSubstructMatch(self.pattern):
+            return [
+                mol.GetProp("_Name"),
+                Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True),
+                is_pains(mol),
+                *calc_descs(mol),  # type: ignore
+            ]
+
+        return []
+
+    def extract(
+        self,
+        file: str,
+    ) -> None:
+        """Extract match structures from a compound library
+
+        Parameters
+        ----------
+        file : str
+            Path to the compound file, should be a .smi file, with or without a header.
+            Module `vspp.smiconverter` could be used to convert files to .smi files.
+
+        Returns
+        -------
+        None
+        """
+
+        # Use `line`, `query_title` and `query_fps`
+        # instead of `query: rdkit.Chem.rdchem.Mol` to save memory
+        with open(file, "r", encoding="utf-8") as f:
+            _args = f.readlines()
+
+        # Compare molecules in parallel
+        logging.info("Start comparing molecules...")
+        with mp.Pool(mp.cpu_count()) as pool:
+            data = pool.map(
+                self._compare_molecules,
+                smart_tqdm(
+                    _args,
+                    total=len(_args),
+                    desc="Comparing",
+                    unit="mol",
+                ),
             )
+        logging.info("Molecules are extracted!")
 
-            logging.info("Similarity calculation is successfully completed.")
+        # Write the output file
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "title",
+                "smiles",
+                "pains",
+                "mol_wt",
+                "log_p",
+                "h_acc",
+                "h_don",
+                "fsp3",
+                "rot_bond",
+                "ring_count",
+                "tpsa",
+                "druglikeness",
+            ],
+        ).dropna()
 
-            # Extract similar structures
-            df["query_title"] = df[queries_title].idxmax(axis=1)
-            df["similarity"] = df[queries_title].max(axis=1)
-            df = df[df["similarity"] >= cutoff].reset_index(drop=True)
-
-            # Drop the query columns
-            df = df.drop(columns=queries_title)
-
-        if patterns := [pattern for pattern in patterns if pattern is not None]:
-            patterns_smarts = [Chem.MolToSmarts(pattern) for pattern in patterns]
-
-            # Substructure matching
-            df[patterns_smarts] = (
-                df["mol"].to_numpy() >= np.array(patterns).reshape(-1, 1)
-            ).T
-
-            logging.info("Substructure matching is successfully completed.")
-
-            # Extract match structures
-            df = df[df[patterns_smarts].any(axis=1)].reset_index(drop=True)
-            df["pattern_smarts"] = df[patterns_smarts].idxmax(axis=1)
-
-            # Drop the pattern columns
-            df = df.drop(columns=patterns_smarts)
-
-        # Generate molecular information
-        df = self.gen_info(df)
-
-        if df.empty:
-            warn("No structures are extracted this time.")
-
-        # Concatenate the dataframes (inner join)
-        if self.structs.empty:
-            self.structs = df
-        else:
-            self.structs = pd.concat([self.structs, df], ignore_index=True, join="inner")
-
-        assert self.structs.notna().all().all()
-
-        if self.structs.empty:
-            warn("No structures are extracted yet.")
-
-    def deduplicate(self) -> None:
-        """Deduplicate the structures"""
-
-        self.structs = self.structs.drop_duplicates(subset="smiles", ignore_index=True)
-
-        logging.info("Deduplication is successfully completed.")
-
-    def sort(self) -> None:
-        """Sort the structures"""
-
-        key = {
-            "query_title": True,
-            "similarity": False,
-            "pattern_smarts": True,
-            "cluster_size": False,
-            "title": True,
-        }
-
-        by = [column for column in key if column in self.structs.columns]
-        ascending = [key[column] for column in by]
-
-        self.structs = self.structs.sort_values(
-            by=by,
-            ascending=ascending,
-            ignore_index=True,
-        )
-
-        logging.info("Sorting is successfully completed.")
+        self.structs = df.sort_values(by="title").reset_index(drop=True)
 
     def cluster(
         self,
@@ -313,29 +351,33 @@ class SmiExtractor:
         fp_type: str = "morgan",
         similarity_metric: str = "tanimoto",
     ) -> None:
-        """Cluster the structures
+        """Cluster match structures
 
         Parameters
         ----------
         cutoff : float, optional
-            Similarity cutoff for clustering, by default 0.6
+            Tanimoto similarity cutoff, by default 0.6
         fp_type : str, optional
-            Fingerprint type for clustering, by default "morgan"
+            Fingerprint type, by default "morgan"
         similarity_metric : str, optional
-            Similarity metric for clustering, by default "tanimoto"
+            Similarity metric, by default "tanimoto"
 
         Returns
         -------
         None
         """
 
-        # Reset the index to assert the correct mapping
-        # self.structs = self.structs.reset_index(drop=True)
-        assert np.all(self.structs.index == np.arange(len(self.structs)))
+        if self.structs.empty:
+            raise ValueError("No match structures are extracted yet.")
 
-        fps = self.structs["mol"].apply(gen_fp, fp_type=fp_type).to_list()
+        logging.info("Generate fingerprints...")
+        fps = (
+            self.structs["smiles"]
+            .apply(lambda x: gen_fp(Chem.MolFromSmiles(x), fp_type))
+            .to_list()
+        )
+
         clusters = cluster_fps(fps, cutoff, similarity_metric)
-        logging.info("Clustering is successfully completed.")
 
         columns = ["cluster_id", "cluster_size", "cluster_centroid"]
 
@@ -349,414 +391,77 @@ class SmiExtractor:
             columns=columns,
         )
 
-        assert np.all(df.index.sort_values() == np.arange(len(self.structs)))
-
         self.structs[columns] = df
 
-    def write(
-        self,
-        output_dir: str,
-        *,
-        by: Literal["structs", "query", "pattern"] = "structs",
-        xlsx: bool = False,
-    ) -> None:
-        """Write the output files
+    def write(self, output_dir: str, xlsx: bool = True) -> None:
+        """Write the output files and draw structures
 
         Parameters
         ----------
         output_dir : str
             Path to the output directory
-        by : str, optional
-            Group by 'structs', 'query', or 'pattern', by default "structs"
         xlsx : bool, optional
-            Save as xlsx file with 2D structures, by default False
-
-        Returns
-        -------
-        None
+            Whether to write an Excel file, by default True
         """
 
+        if self.structs.empty:
+            raise ValueError("No similar structures are extracted yet.")
+
         os.makedirs(output_dir, exist_ok=True)
+        if xlsx:
+            PandasTools.AddMoleculeColumnToFrame(
+                self.structs, "smiles", "mol", includeFingerprints=True
+            )
+            PandasTools.SaveXlsxFromFrame(
+                self.structs,
+                os.path.join(output_dir, f"{self.smarts}.xlsx"),
+                molCol="mol",
+                size=(300, 300),
+            )
+            logging.info("Write %s.xlsx", self.smarts)
+        else:
+            self.structs.to_csv(
+                os.path.join(output_dir, f"{self.smarts}.csv"), index=False
+            )
+            logging.info("Write %s.csv", self.smarts)
 
-        match by, xlsx:
-            case "structs", True:
-                PandasTools.SaveXlsxFromFrame(
-                    self.structs,
-                    os.path.join(output_dir, "structs.xlsx"),
-                    molCol="mol",
-                    size=(150, 150),
-                )
-                logging.info("Write structs.xlsx")
-            case "structs", False:
-                self.structs.drop(columns="mol").to_csv(
-                    os.path.join(output_dir, "structs.csv"), index=False
-                )
-                logging.info("Write structs.csv")
-            case "query", True:
-                if "query_title" not in self.structs.columns:
-                    raise ValueError("No query information is available.")
-                for title, group in self.structs.groupby("query_title"):
-                    PandasTools.SaveXlsxFromFrame(
-                        group,
-                        os.path.join(output_dir, f"{title}.xlsx"),
-                        molCol="mol",
-                        size=(150, 150),
-                    )
-                    logging.info("Write %s.xlsx", title)
-            case "query", False:
-                if "query_title" not in self.structs.columns:
-                    raise ValueError("No query information is available.")
-                for title, group in self.structs.groupby("query_title"):
-                    group.drop(columns="mol").to_csv(
-                        os.path.join(output_dir, f"{title}.csv"), index=False
-                    )
-                    logging.info("Write %s.csv", title)
-            case "pattern", True:
-                if "pattern_smarts" not in self.structs.columns:
-                    raise ValueError("No pattern information is available.")
-                for smarts, group in self.structs.groupby("pattern_smarts"):
-                    PandasTools.SaveXlsxFromFrame(
-                        group,
-                        os.path.join(output_dir, f"{smarts}.xlsx"),
-                        molCol="mol",
-                        size=(150, 150),
-                    )
-                    logging.info("Write %s.xlsx", smarts)
-            case "pattern", False:
-                if "pattern_smarts" not in self.structs.columns:
-                    raise ValueError("No pattern information is available.")
-                for smarts, group in self.structs.groupby("pattern_smarts"):
-                    group.drop(columns="mol").to_csv(
-                        os.path.join(output_dir, f"{smarts}.csv"), index=False
-                    )
-                    logging.info("Write %s.csv", smarts)
-            case _:
-                raise ValueError(
-                    "Invalid value for `by`, should be 'structs', 'query', or 'pattern'."
-                )
-
-    def draw(
-        self,
-        output_dir: str,
-        *,
-        by: Literal["structs", "query", "pattern"] = "structs",
-        centroid: bool = False,
-        **kwargs,
-    ) -> None:
-        """Draw 2D structures
+    def draw(self, output_dir: str, centroid: bool = True, **kwargs) -> None:
+        """Draw structures
 
         Parameters
         ----------
         output_dir : str
             Path to the output directory
-        by : str, optional
-            Group by 'structs', 'query', or 'pattern', by default "structs"
         centroid : bool, optional
-            Draw only centroids, by default False
-        kwargs : Any
-            Additional arguments for drawing 2D structures
-
-        Returns
-        -------
-        None
+            Whether only to draw the cluster centroids, by default True
+        kwargs :
+            Other keyword arguments for `draw_mols`.
         """
 
+        if self.structs.empty:
+            raise ValueError("No similar structures are extracted yet.")
+        if "cluster_centroid" not in self.structs.columns:
+            raise ValueError("No clusters are generated yet.")
+
         os.makedirs(output_dir, exist_ok=True)
-
-        match by, centroid:
-            case "structs", True:
-                if "cluster_centroid" not in self.structs.columns:
-                    raise ValueError("No cluster information is available.")
-                structs_centroid = self.structs[self.structs["cluster_centroid"]]
-                draw_mols(
-                    structs_centroid["mol"].to_list(),
-                    os.path.join(output_dir, "centroids.png"),
-                    legends=structs_centroid["title"].to_list(),
-                    **kwargs,
-                )
-                logging.info("Draw centroids.png")
-            case "structs", False:
-                draw_mols(
-                    self.structs["mol"].to_list(),
-                    os.path.join(output_dir, "structs.png"),
-                    legends=self.structs["title"].to_list(),
-                    **kwargs,
-                )
-                logging.info("Draw structs.png")
-            case "query", True:
-                if "query_title" not in self.structs.columns:
-                    raise ValueError("No query information is available.")
-                if "cluster_centroid" not in self.structs.columns:
-                    raise ValueError("No cluster information is available.")
-                for title, group in self.structs.groupby("query_title"):
-                    group_centroid = group[group["cluster_centroid"]]
-                    legends = [
-                        " ".join(x)
-                        for x in zip(
-                            group_centroid["title"],
-                            group_centroid["similarity"].apply(lambda x: f"{x:.3f}"),
-                        )
-                    ]
-                    draw_mols(
-                        group_centroid["mol"].to_list(),
-                        os.path.join(output_dir, f"{title}_centroids.png"),
-                        legends=legends,
-                        **kwargs,
-                    )
-                    logging.info("Draw %s_centroids.png", title)
-            case "query", False:
-                if "query_title" not in self.structs.columns:
-                    raise ValueError("No query information is available.")
-                for title, group in self.structs.groupby("query_title"):
-                    legends = [
-                        " ".join(x)
-                        for x in zip(
-                            group["title"],
-                            group["similarity"].apply(lambda x: f"{x:.3f}"),
-                        )
-                    ]
-                    draw_mols(
-                        group["mol"].to_list(),
-                        os.path.join(output_dir, f"{title}.png"),
-                        legends=legends,
-                        **kwargs,
-                    )
-                    logging.info("Draw %s.png", title)
-            case "pattern", True:
-                if "pattern_smarts" not in self.structs.columns:
-                    raise ValueError("No pattern information is available.")
-                if "cluster_centroid" not in self.structs.columns:
-                    raise ValueError("No cluster information is available.")
-                for smarts, group in self.structs.groupby("pattern_smarts"):
-                    group_centroid = group[group["cluster_centroid"]]
-                    draw_mols(
-                        group_centroid["mol"].to_list(),
-                        os.path.join(output_dir, f"{smarts}_centroids.png"),
-                        legends=group_centroid["title"].to_list(),
-                        pattern=Chem.MolFromSmarts(smarts),
-                        **kwargs,
-                    )
-                    logging.info("Draw %s_centroids.png", smarts)
-            case "pattern", False:
-                if "pattern_smarts" not in self.structs.columns:
-                    raise ValueError("No pattern information is available.")
-                for smarts, group in self.structs.groupby("pattern_smarts"):
-                    draw_mols(
-                        group["mol"].to_list(),
-                        os.path.join(output_dir, f"{smarts}.png"),
-                        legends=group["title"].to_list(),
-                        pattern=Chem.MolFromSmarts(smarts),
-                        **kwargs,
-                    )
-                    logging.info("Draw %s.png", smarts)
-
-
-def extract_smistructs(
-    *args: str,
-    output_dir: str | None = None,
-    queries_file: str | None = None,
-    patterns_smarts: Sequence[str] = (),
-    extract_cutoff: float = 0.8,
-    extract_fp_type: str = "topological_torsion",
-    extract_similarity_metric: str = "dice",
-    cluster_cutoff: float = 0.6,
-    cluster_fp_type: str = "morgan",
-    cluster_similarity_metric: str = "tanimoto",
-    by: Literal["structs", "query", "pattern"] = "structs",
-    xlsx: bool = False,
-    centroid: bool = False,
-    **kwargs: Any,
-) -> None:
-    """Extract similar and matched structures from .smi files
-
-    Parameters
-    ----------
-    args : str
-        Path to the .smi files
-    output_dir : str, optional
-        Path to the output directory, by default None,
-        i.e., the same directory as the first input files
-    queries_file : str, optional
-        Path to the queries file, by default None
-    patterns_smarts : Sequence[str], optional
-        A list of substructure SMARTS patterns, by default an empty tuple
-    extract_cutoff : float, optional
-        Similarity cutoff for extraction, by default 0.8
-    extract_fp_type : str, optional
-        Fingerprint type for extraction, by default "topological_torsion"
-    extract_similarity_metric : str, optional
-        Similarity metric for extraction, by default "dice"
-    cluster_cutoff : float, optional
-        Similarity cutoff for clustering, by default 0.6
-    cluster_fp_type : str, optional
-        Fingerprint type for clustering, by default "morgan"
-    cluster_similarity_metric : str, optional
-        Similarity metric for clustering, by default "tanimoto"
-    by : str, optional
-        Group by 'structs', 'query', or 'pattern', by default "structs"
-    xlsx : bool, optional
-        Save as xlsx file with 2D structures, by default False
-    centroid : bool, optional
-        Draw only centroids, by default False
-    kwargs : Any
-        Additional arguments for drawing 2D structures
-
-    Returns
-    -------
-    None
-    """
-
-    if queries_file is None:
-        queries = []
-    else:
-        queries = [query for query in MolSupplier(queries_file) if query is not None]
-
-    patterns = [
-        pattern
-        for smarts in patterns_smarts
-        if (pattern := Chem.MolFromSmarts(smarts)) is not None
-    ]
-
-    smi_extractor = SmiExtractor()
-
-    smi_extractor.extract(
-        *args,
-        queries=queries,
-        patterns=patterns,
-        cutoff=extract_cutoff,
-        fp_type=extract_fp_type,
-        similarity_metric=extract_similarity_metric,
-    )
-
-    smi_extractor.deduplicate()
-    smi_extractor.sort()
-
-    smi_extractor.cluster(
-        cutoff=cluster_cutoff,
-        fp_type=cluster_fp_type,
-        similarity_metric=cluster_similarity_metric,
-    )
-
-    if output_dir is None:
-        output_dir = os.path.dirname(args[0])
-    smi_extractor.write(output_dir, by=by, xlsx=xlsx)
-    smi_extractor.draw(output_dir, by=by, centroid=centroid, **kwargs)
-
-
-def main() -> None:
-    """Main function
-
-    Returns
-    -------
-    None
-    """
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "smi_files",
-        type=str,
-        nargs="+",
-        help="Path to the .smi files",
-    )
-    parser.add_argument(
-        "-o",
-        "--output_dir",
-        type=str,
-        help="Path to the output directory",
-    )
-    parser.add_argument(
-        "-q",
-        "--queries_file",
-        type=str,
-        help="Path to the queries file",
-    )
-    parser.add_argument(
-        "-p",
-        "--patterns_file",
-        type=str,
-        help="Path to the patterns file",
-    )
-    parser.add_argument(
-        "-ec",
-        "--extract_cutoff",
-        type=float,
-        default=0.8,
-        help="Similarity cutoff for extraction",
-    )
-    parser.add_argument(
-        "-ef",
-        "--extract_fp_type",
-        type=str,
-        default="topological_torsion",
-        help="Fingerprint type for extraction",
-    )
-    parser.add_argument(
-        "-es",
-        "--extract_similarity_metric",
-        type=str,
-        default="dice",
-        help="Similarity metric for extraction",
-    )
-    parser.add_argument(
-        "-cc",
-        "--cluster_cutoff",
-        type=float,
-        default=0.6,
-        help="Similarity cutoff for clustering",
-    )
-    parser.add_argument(
-        "-cf",
-        "--cluster_fp_type",
-        type=str,
-        default="morgan",
-        help="Fingerprint type for clustering",
-    )
-    parser.add_argument(
-        "-cs",
-        "--cluster_similarity_metric",
-        type=str,
-        default="tanimoto",
-        help="Similarity metric for clustering",
-    )
-    parser.add_argument(
-        "-b",
-        "--by",
-        type=str,
-        default="structs",
-        choices=["structs", "query", "pattern"],
-        help="Group by 'structs', 'query', or 'pattern'",
-    )
-    parser.add_argument(
-        "-x",
-        "--xlsx",
-        action="store_true",
-        help="Save as xlsx file with 2D structures",
-    )
-    parser.add_argument(
-        "-c",
-        "--centroid",
-        action="store_true",
-        help="Draw only centroids",
-    )
-
-    args = parser.parse_args()
-
-    extract_smistructs(
-        *args.smi_files,
-        output_dir=args.output_dir,
-        queries_file=args.queries_file,
-        patterns_file=args.patterns_file,
-        extract_cutoff=args.extract_cutoff,
-        extract_fp_type=args.extract_fp_type,
-        extract_similarity_metric=args.extract_similarity_metric,
-        cluster_cutoff=args.cluster_cutoff,
-        cluster_fp_type=args.cluster_fp_type,
-        cluster_similarity_metric=args.cluster_similarity_metric,
-        by=args.by,
-        xlsx=args.xlsx,
-        centroid=args.centroid,
-    )
-
-
-if __name__ == "__main__":
-    main()
+        if centroid:
+            draw_mols(
+                self.structs[self.structs["cluster_centroid"]]["smiles"]
+                .apply(Chem.MolFromSmiles)
+                .to_list(),
+                os.path.join(output_dir, f"{self.smarts}.png"),
+                legends=self.structs[self.structs["cluster_centroid"]][
+                    "title"
+                ].to_list(),
+                pattern=self.pattern,
+                **kwargs,
+            )
+        else:
+            draw_mols(
+                self.structs["smiles"].apply(Chem.MolFromSmiles).to_list(),
+                os.path.join(output_dir, f"{self.smarts}.png"),
+                legends=self.structs["title"].to_list(),
+                pattern=self.pattern,
+                **kwargs,
+            )
+        logging.info("Draw %s.png", self.smarts)

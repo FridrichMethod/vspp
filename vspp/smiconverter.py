@@ -5,7 +5,7 @@ import multiprocessing as mp
 import os
 from concurrent.futures import ThreadPoolExecutor
 from itertools import batched
-from typing import Self, Sequence
+from typing import Sequence
 from warnings import warn
 
 import nest_asyncio
