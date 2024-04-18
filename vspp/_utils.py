@@ -1,5 +1,8 @@
 import gzip
+import logging
+import multiprocessing as mp
 import os
+from itertools import chain
 from typing import Any, Callable, Generator, Iterable, Self, Sequence
 from warnings import warn
 
@@ -277,15 +280,21 @@ def cluster_fps(
     """
 
     nfps = len(fps)
+
     # Calculate the distance matrix
+    logging.info("Calculating distances...")
     distances = [
         1 - calc_sim(fps[i], fps[j], similarity_metric)
         for i in range(nfps)
         for j in range(i)
     ]
+    logging.info("Distance map is generated successfully!")
 
     # Cluster the molecules by their Morgan fingerprints
+    logging.info("Start clustering...")
     clusters = list(Butina.ClusterData(distances, nfps, 1 - cutoff, isDistData=True))
+    logging.info("Molecules are clustered successfully!")
+
     # Sort the clusters by the number of molecules in each cluster
     clusters.sort(key=len, reverse=True)
 

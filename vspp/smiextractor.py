@@ -160,8 +160,14 @@ class SmiExtractor:
 
         logging.info("Start generating molecular information...")
 
-        df["pains"] = df["mol"].apply(is_pains)
-        df[
+        if df.empty:
+            warn("No molecular structures are provided.")
+            return df
+
+        df_copy = df.copy()
+
+        df_copy["pains"] = df_copy["mol"].apply(is_pains)
+        df_copy[
             [
                 "mol_wt",
                 "log_p",
@@ -174,12 +180,12 @@ class SmiExtractor:
                 "druglikeness",
             ]
         ] = (
-            df["mol"].apply(calc_descs).apply(pd.Series)
+            df_copy["mol"].apply(calc_descs).apply(pd.Series)
         )
 
         logging.info("Molecular information is successfully generated.")
 
-        return df
+        return df_copy
 
     def extract(
         self,
@@ -215,8 +221,7 @@ class SmiExtractor:
         # Read the .smi files
         df = self.read_smi(*args)
 
-        queries = [query for query in queries if query is not None]
-        if queries:
+        if queries := [query for query in queries if query is not None]:
             queries_title = [query.GetProp("_Name") for query in queries]
             queries_fps = [gen_fp(query, fp_type) for query in queries]
 
@@ -238,8 +243,7 @@ class SmiExtractor:
             # Drop the query columns
             df = df.drop(columns=queries_title)
 
-        patterns = [pattern for pattern in patterns if pattern is not None]
-        if patterns:
+        if patterns := [pattern for pattern in patterns if pattern is not None]:
             patterns_smarts = [Chem.MolToSmarts(pattern) for pattern in patterns]
 
             # Substructure matching
@@ -465,17 +469,17 @@ class SmiExtractor:
                     raise ValueError("No cluster information is available.")
                 structs_centroid = self.structs[self.structs["cluster_centroid"]]
                 draw_mols(
-                    structs_centroid["mol"].tolist(),
+                    structs_centroid["mol"].to_list(),
                     os.path.join(output_dir, "centroids.png"),
-                    legends=structs_centroid["title"].tolist(),
+                    legends=structs_centroid["title"].to_list(),
                     **kwargs,
                 )
                 logging.info("Draw centroids.png")
             case "structs", False:
                 draw_mols(
-                    self.structs["mol"].tolist(),
+                    self.structs["mol"].to_list(),
                     os.path.join(output_dir, "structs.png"),
-                    legends=self.structs["title"].tolist(),
+                    legends=self.structs["title"].to_list(),
                     **kwargs,
                 )
                 logging.info("Draw structs.png")
@@ -494,7 +498,7 @@ class SmiExtractor:
                         )
                     ]
                     draw_mols(
-                        group_centroid["mol"].tolist(),
+                        group_centroid["mol"].to_list(),
                         os.path.join(output_dir, f"{title}_centroids.png"),
                         legends=legends,
                         **kwargs,
@@ -512,7 +516,7 @@ class SmiExtractor:
                         )
                     ]
                     draw_mols(
-                        group["mol"].tolist(),
+                        group["mol"].to_list(),
                         os.path.join(output_dir, f"{title}.png"),
                         legends=legends,
                         **kwargs,
@@ -526,9 +530,9 @@ class SmiExtractor:
                 for smarts, group in self.structs.groupby("pattern_smarts"):
                     group_centroid = group[group["cluster_centroid"]]
                     draw_mols(
-                        group_centroid["mol"].tolist(),
+                        group_centroid["mol"].to_list(),
                         os.path.join(output_dir, f"{smarts}_centroids.png"),
-                        legends=group_centroid["title"].tolist(),
+                        legends=group_centroid["title"].to_list(),
                         pattern=Chem.MolFromSmarts(smarts),
                         **kwargs,
                     )
@@ -538,9 +542,9 @@ class SmiExtractor:
                     raise ValueError("No pattern information is available.")
                 for smarts, group in self.structs.groupby("pattern_smarts"):
                     draw_mols(
-                        group["mol"].tolist(),
+                        group["mol"].to_list(),
                         os.path.join(output_dir, f"{smarts}.png"),
-                        legends=group["title"].tolist(),
+                        legends=group["title"].to_list(),
                         pattern=Chem.MolFromSmarts(smarts),
                         **kwargs,
                     )
