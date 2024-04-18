@@ -465,3 +465,10 @@ class MatExtractor:
                 **kwargs,
             )
         logging.info("Draw %s.png", self.smarts)
+
+
+def main() -> None: ...
+
+
+if __name__ == "__main__":
+    main()

@@ -167,7 +167,11 @@ class SmiConverter:
         logging.info("SMILES and title are sorted.")
 
     def _write_batch(
-        self, chunk: Sequence[tuple[str, str]], output_dir: str, file_index: int
+        self,
+        chunk: Sequence[tuple[str, str]],
+        output_dir: str,
+        file_name: str,
+        file_index: int,
     ) -> None:
         """Write a batch of molecules to a .smi file"""
 
@@ -175,7 +179,7 @@ class SmiConverter:
             return None
 
         with open(
-            os.path.join(output_dir, f"lig_{file_index}.smi"),
+            os.path.join(output_dir, f"{file_name}_{file_index}.smi"),
             "w",
             encoding="utf-8",
         ) as f:
@@ -185,17 +189,21 @@ class SmiConverter:
         logging.info(
             "Chunk %d is written to %s_%d.smi",
             file_index,
-            "lig",
+            file_name,
             file_index,
         )
 
-    def write(self, output_dir: str, chunk_size: int = 0) -> None:
+    def write(
+        self, output_dir: str, file_name: str = "lig", chunk_size: int = 0
+    ) -> None:
         """Write the .smi file
 
         Parameters
         ----------
         output_dir : str
             Path to the output directory
+        file_name : str, optional
+            The file name of the .smi file, by default "lig"
         chunk_size : int, optional
             The chunk size to split the .smi file in the output, by default 0
 
@@ -210,12 +218,12 @@ class SmiConverter:
         os.makedirs(output_dir, exist_ok=True)
 
         if chunk_size <= 0:
-            self._write_batch(self.smi_ttl, output_dir, 0)
+            self._write_batch(self.smi_ttl, output_dir, file_name, 0)
             logging.info("The .smi file is written to %s", output_dir)
         else:
             with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
                 for i, chunk in enumerate(batched(self.smi_ttl, chunk_size)):
-                    executor.submit(self._write_batch, chunk, output_dir, i)
+                    executor.submit(self._write_batch, chunk, output_dir, file_name, i)
             logging.info(
                 "All .smi files are written to %s",
                 output_dir,
@@ -225,12 +233,13 @@ class SmiConverter:
 def files2smi(
     *args: str,
     output_dir: str | None = None,
+    file_name: str = "lig",
     prop: str = "_Name",
     prefix: str = "",
     filt: dict[str, tuple[float, float]] | None = None,
     deduplicate: bool = False,
     sort: bool = False,
-    batch_size: int = 0,
+    chunk_size: int = 0,
     asynchronous: bool = False,
     multithreaded: bool = False,
 ) -> None:
@@ -241,8 +250,10 @@ def files2smi(
     args : str
         Path to the files to be converted
     output_dir : str | None, optional
-        Path to the output directory, by default None, 
+        Path to the output directory, by default None,
         i.e., the same directory as the first input file
+    file_name : str, optional
+        The file name of the .smi file, by default "lig"
     prop : str, optional
         The property of molecules, especially in .sdf files, to be used as the title,
         by default "_Name", i.e., the default name of the molecule
@@ -256,8 +267,8 @@ def files2smi(
         Deduplicate the molecules, by default False
     sort : bool, optional
         Sort the molecules, by default False
-    batch_size : int, optional
-        The batch size to split the .smi file in the output, by default 0
+    chunk_size : int, optional
+        The chunk size to split the .smi file in the output, by default 0
     asynchronous : bool, optional
         Whether to convert the file asynchronously, by default False. Recommended for large files.
     multithreaded : bool, optional
@@ -279,7 +290,7 @@ def files2smi(
 
     if output_dir is None:
         output_dir = os.path.dirname(args[0])
-    smi_converter.write(output_dir, batch_size)
+    smi_converter.write(output_dir, file_name, chunk_size)
 
 
 def main():
@@ -299,6 +310,12 @@ def main():
         default=None,
     )
     parser.add_argument(
+        "-n",
+        "--file_name",
+        help="The file name of the .smi file",
+        default="lig",
+    )
+    parser.add_argument(
         "-p",
         "--prop",
         help="The property to be used as the title",
@@ -309,14 +326,6 @@ def main():
         "--prefix",
         help="The prefix to be added to the title",
         default="",
-    )
-    parser.add_argument(
-        "-f",
-        "--filt",
-        help="The filter to be applied to the descriptors",
-        type=str,
-        nargs="+",
-        default=None,
     )
     parser.add_argument(
         "-d",
@@ -331,9 +340,9 @@ def main():
         action="store_true",
     )
     parser.add_argument(
-        "-b",
-        "--batch_size",
-        help="The batch size to split the .smi file, by default 0, i.e., no batches generated",
+        "-c",
+        "--chunk_size",
+        help="The chunk size to split the .smi file in the output",
         type=int,
         default=0,
     )
@@ -350,23 +359,35 @@ def main():
         action="store_true",
     )
 
-    args = parser.parse_args()
-    filt = dict(
-        zip(
-            args.filt[::3],
-            zip(map(float, args.filt[1::3]), map(float, args.filt[2::3])),
-        )
-    )
+    args, unknown_args = parser.parse_known_args()
+
+    args_dict: dict[str, list[float]] = {}
+    key = None
+    for arg in unknown_args:
+        if arg.startswith("-"):
+            key = arg
+            args_dict[key] = []
+        elif key is None:
+            raise ValueError(f"Wrong argument: {arg}")
+        else:
+            args_dict[key].append(float(arg))
+
+    filt: dict[str, tuple[float, float]] = {}
+    for key, value in args_dict.items():
+        if len(value) != 2:
+            raise ValueError(f"Wrong number of arguments for {key}")
+        filt[key.replace("-", "")] = tuple(value)  # type: ignore
 
     files2smi(
         *args.input_files,
         output_dir=args.output_dir,
+        file_name=args.file_name,
         prop=args.prop,
         prefix=args.prefix,
         filt=filt,
         deduplicate=args.deduplicate,
         sort=args.sort,
-        batch_size=args.batch_size,
+        chunk_size=args.chunk_size,
         asynchronous=args.asynchronous,
         multithreaded=args.multithreaded,
     )
