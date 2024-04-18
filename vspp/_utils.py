@@ -18,9 +18,9 @@ from tqdm.notebook import tqdm as tqdm_notebook
 
 type FingerPrint = DataStructs.cDataStructs.ExplicitBitVect
 
-DEFAULT_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
+BUILTIN_DESC_NAMES: set[str] = {name for name, _ in Descriptors.descList}
 
-DESC_NAMES: tuple[str, ...] = (
+COMMON_DESC_NAMES: tuple[str, ...] = (
     "MolWt",
     "MolLogP",
     "NumHAcceptors",
@@ -213,8 +213,8 @@ def calc_descs(
         `FractionCSP3`, `NumRotatableBonds`, `RingCount`, `TPSA` and `qed` are other common descriptors.
     """
 
-    desc_names = args or DESC_NAMES
-    if invalid_filter_keys := set(desc_names) - set(DEFAULT_DESC_NAMES):
+    desc_names = args or COMMON_DESC_NAMES
+    if invalid_filter_keys := set(desc_names) - set(BUILTIN_DESC_NAMES):
         raise KeyError(f"Invalid descriptor names: {invalid_filter_keys}")
     calc = MoleculeDescriptors.MolecularDescriptorCalculator(desc_names)
 

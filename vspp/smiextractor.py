@@ -204,7 +204,7 @@ class SimExtractor:
         ----------
         output_dir : str
             Path to the output directory
-        kwargs :
+        kwargs
             Other keyword arguments for `draw_mols`.
         """
 
@@ -434,7 +434,7 @@ class MatExtractor:
             Path to the output directory
         centroid : bool, optional
             Whether only to draw the cluster centroids, by default True
-        kwargs :
+        kwargs
             Other keyword arguments for `draw_mols`.
         """
 

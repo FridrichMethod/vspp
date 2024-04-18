@@ -4,10 +4,13 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
+from pandarallel import pandarallel
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
 from vspp._utils import calc_bulk_sim, calc_descs, gen_fp, is_pains
+
+pandarallel.initialize(progress_bar=True)
 
 
 def smi2pd(*args: str) -> pd.DataFrame:
@@ -94,13 +97,11 @@ def gen_info(df: pd.DataFrame) -> pd.DataFrame:
         - druglikeness: Drug-likeness score
     """
 
-    logging.info("Start generating molecular information...")
-
-    if df.empty:
-        warn("No molecular structures are provided.")
-        return df
-
+    if df.empty or ("mol" not in df.columns):
+        raise ValueError("No molecular structures are found in the dataframe.")
     df_copy = df.copy()
+
+    logging.info("Start generating molecular information...")
 
     df_copy["pains"] = df_copy["mol"].apply(is_pains)
     df_copy[
@@ -116,7 +117,7 @@ def gen_info(df: pd.DataFrame) -> pd.DataFrame:
             "druglikeness",
         ]
     ] = (
-        df_copy["mol"].apply(calc_descs).apply(pd.Series)
+        df_copy["mol"].parallel_apply(calc_descs).apply(pd.Series)
     )
 
     logging.info("Molecular information is successfully generated.")
