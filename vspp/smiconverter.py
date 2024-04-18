@@ -9,7 +9,6 @@ from typing import Sequence
 from warnings import warn
 
 import nest_asyncio
-import pandas as pd
 from rdkit import Chem
 
 from vspp._utils import MolSupplier, filt_descs, smart_tqdm
@@ -194,7 +193,7 @@ class SmiConverter:
         )
 
     def write(
-        self, output_dir: str, file_name: str = "lig", chunk_size: int = 0
+        self, output_dir: str, file_name: str, chunk_size: int = 0
     ) -> None:
         """Write the .smi file
 
@@ -202,8 +201,8 @@ class SmiConverter:
         ----------
         output_dir : str
             Path to the output directory
-        file_name : str, optional
-            The file name of the .smi file, by default "lig"
+        file_name : str
+            The file name of the .smi file
         chunk_size : int, optional
             The chunk size to split the .smi file in the output, by default 0
 
