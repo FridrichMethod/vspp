@@ -11,14 +11,7 @@ from pandarallel import pandarallel
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
-from vspp._utils import (
-    calc_descs,
-    calc_sim,
-    cluster_fps,
-    draw_mols,
-    gen_fp,
-    is_pains,
-)
+from vspp._utils import calc_descs, calc_sim, cluster_fps, draw_mols, gen_fp, is_pains
 
 pandarallel.initialize(progress_bar=True)
 
@@ -159,7 +152,7 @@ def write_df(
     """
 
     if df.empty:
-        raise ValueError("No similar structures are extracted yet.")
+        raise ValueError("No molecular structures are found in the dataframe.")
 
     os.makedirs(output_dir, exist_ok=True)
     if xlsx:
@@ -183,6 +176,26 @@ class SimExtractor:
 
     def __init__(
         self,
+        file: str,
+    ) -> None:
+        """Initialize the class
+
+        Parameters
+        ----------
+        file : str
+            Path to the .smi file
+
+        Returns
+        -------
+        None
+        """
+
+        self.library: pd.DataFrame = smi2df(file)
+        self.structs: pd.DataFrame = pd.DataFrame()
+        self.query = None
+
+    def extract(
+        self,
         query: Chem.rdchem.Mol,
         *,
         cutoff: float = 0.8,
@@ -190,14 +203,14 @@ class SimExtractor:
         fp_type: str = "topological_torsion",
         similarity_metric: str = "dice",
     ) -> None:
-        """Initialize the SimExtractor
+        """Extract similar structures
 
         Parameters
         ----------
-        query : rdkit.Chem.rdchem.Mol
-            A query molecule
+        query : Chem.rdchem.Mol
+            Query structure
         cutoff : float, optional
-            Dice similarity cutoff, by default 0.8
+            Similarity cutoff, by default 0.8
         upper_cutoff : float, optional
             Upper cutoff for similarity, by default 1.0
         fp_type : str, optional
@@ -211,56 +224,30 @@ class SimExtractor:
         """
 
         if query is None:
-            raise ValueError("The query molecule is invalid.")
-        self.query = query
-        self.query_title = query.GetProp("_Name")
-        self.query_fp = gen_fp(query, fp_type)
-
-        self.cutoff = cutoff
-        self.upper_cutoff = upper_cutoff
-        self.fp_type = fp_type
-        self.similarity_metric = similarity_metric
-
-        self.structs: pd.DataFrame = pd.DataFrame()
-
-    def extract(
-        self,
-        file: str,
-    ) -> None:
-        """Extract similar structures
-
-        Parameters
-        ----------
-        file : str
-            Path to the .smi file
-
-        Returns
-        -------
-        None
-        """
-
-        if self.query is None:
             raise ValueError("No query structures are provided.")
-        query_fp = gen_fp(self.query, self.fp_type)
+        self.query = query
+        query_fp = gen_fp(query, fp_type)
 
-        df = smi2df(file)
+        df = self.library.copy()
 
         # Generate fingerprints and calculate similarities
         df["similarity"] = df["smiles"].parallel_apply(
             lambda x: calc_sim(
-                gen_fp(Chem.MolFromSmiles(x), self.fp_type),
+                gen_fp(Chem.MolFromSmiles(x), fp_type),
                 query_fp,
-                self.similarity_metric,
+                similarity_metric,
             )
         )
         logging.info("Similarity calculation is successfully completed.")
 
         df = df[
-            (df["similarity"] > self.cutoff) & (df["similarity"] <= self.upper_cutoff)
+            (df["similarity"] > cutoff) & (df["similarity"] <= upper_cutoff)
         ].reset_index(drop=True)
 
         if df.empty:
             warn("No structures passed the similarity cutoff.")
+
+        df = df.sort_values(by=["similarity", "title"], ascending=[False, True]).reset_index(drop=True)
 
         df = gen_info(df)
 
@@ -284,10 +271,13 @@ class SimExtractor:
             Image size, by default (300, 300)
         """
 
+        if self.structs.empty or (self.query is None):
+            raise ValueError("No similar structures are extracted yet.")
+
         write_df(
             self.structs,
             output_dir,
-            self.query_title,
+            self.query.GetProp("_Name"),
             xlsx=xlsx,
             image_size=image_size,
         )
@@ -303,13 +293,13 @@ class SimExtractor:
             Other keyword arguments for `draw_mols`.
         """
 
-        if self.structs.empty:
+        if self.structs.empty or (self.query is None):
             raise ValueError("No similar structures are extracted yet.")
 
         os.makedirs(output_dir, exist_ok=True)
         draw_mols(
             self.structs["smiles"].apply(Chem.MolFromSmiles).to_list(),
-            os.path.join(output_dir, f"{self.query_title}.png"),
+            os.path.join(output_dir, f"{self.query.GetProp("_Name")}.png"),
             legends=[
                 " ".join(x)
                 for x in zip(
@@ -319,7 +309,7 @@ class SimExtractor:
             ],
             **kwargs,
         )
-        logging.info("Draw %s.png", self.query_title)
+        logging.info("Draw %s.png", self.query.GetProp("_Name"))
 
 
 class MatExtractor:
@@ -327,32 +317,9 @@ class MatExtractor:
 
     def __init__(
         self,
-        pattern: Chem.rdchem.Mol,
-    ) -> None:
-        """Initialize the MatExtractor
-
-        Parameters
-        ----------
-        pattern : rdkit.Chem.rdchem.Mol
-            A SMARTS pattern
-
-        Returns
-        -------
-        None
-        """
-
-        if pattern is None:
-            raise ValueError("The pattern is invalid.")
-        self.pattern = pattern
-        self.smarts = Chem.MolToSmarts(pattern, isomericSmiles=True)
-
-        self.structs: pd.DataFrame = pd.DataFrame()
-
-    def extract(
-        self,
         file: str,
     ) -> None:
-        """Extract matched structures
+        """Initialize the class
 
         Parameters
         ----------
@@ -364,19 +331,42 @@ class MatExtractor:
         None
         """
 
-        if self.pattern is None:
-            raise ValueError("No pattern structures are provided.")
+        self.library: pd.DataFrame = smi2df(file)
+        self.structs: pd.DataFrame = pd.DataFrame()
+        self.pattern = None
 
-        df = smi2df(file)
+    def extract(
+        self,
+        pattern: Chem.rdchem.Mol,
+    ) -> None:
+        """Extract match structures
+
+        Parameters
+        ----------
+        pattern : Chem.rdchem.Mol
+            Pattern structure
+
+        Returns
+        -------
+        None
+        """
+
+        if pattern is None:
+            raise ValueError("No pattern structures are provided.")
+        self.pattern = pattern
+
+        df = self.library.copy()
 
         df = df[
             df["smiles"].parallel_apply(
-                lambda x: Chem.MolFromSmiles(x).HasSubstructMatch(self.pattern)
+                lambda x: Chem.MolFromSmiles(x).HasSubstructMatch(pattern)
             )
         ].reset_index(drop=True)
 
         if df.empty:
             warn("No structures are matched.")
+
+        df = df.sort_values(by="title").reset_index(drop=True)
 
         df = gen_info(df)
 
@@ -405,8 +395,10 @@ class MatExtractor:
         None
         """
 
-        if self.structs.empty:
+        if self.structs.empty or (self.pattern is None):
             raise ValueError("No match structures are extracted yet.")
+
+        df = self.structs.copy()
 
         logging.info("Generate fingerprints...")
         fps = (
@@ -417,7 +409,7 @@ class MatExtractor:
 
         clusters = cluster_fps(fps, cutoff, similarity_metric)
 
-        df = pd.DataFrame.from_dict(
+        df[["cluster_id", "cluster_size", "cluster_centroid"]] = pd.DataFrame.from_dict(
             {
                 idx: (i, len(cluster), j == 0)
                 for i, cluster in enumerate(clusters)
@@ -426,7 +418,9 @@ class MatExtractor:
             orient="index",
         )
 
-        self.structs[["cluster_id", "cluster_size", "cluster_centroid"]] = df
+        df = df.sort_values(by=["cluster_id", "title"]).reset_index(drop=True)
+
+        self.structs = df
 
     def write(
         self,
@@ -446,10 +440,13 @@ class MatExtractor:
             Image size, by default (300, 300)
         """
 
+        if self.structs.empty or (self.pattern is None):
+            raise ValueError("No match structures are extracted yet.")
+
         write_df(
             self.structs,
             output_dir,
-            self.smarts,
+            self.pattern.GetProp("_Name"),
             xlsx=xlsx,
             image_size=image_size,
         )
@@ -467,8 +464,8 @@ class MatExtractor:
             Other keyword arguments for `draw_mols`.
         """
 
-        if self.structs.empty:
-            raise ValueError("No similar structures are extracted yet.")
+        if self.structs.empty or (self.pattern is None):
+            raise ValueError("No match structures are extracted yet.")
         if "cluster_centroid" not in self.structs.columns:
             raise ValueError("No clusters are generated yet.")
 
@@ -478,7 +475,7 @@ class MatExtractor:
                 self.structs[self.structs["cluster_centroid"]]["smiles"]
                 .apply(Chem.MolFromSmiles)
                 .to_list(),
-                os.path.join(output_dir, f"{self.smarts}.png"),
+                os.path.join(output_dir, f"{self.pattern.GetProp("_Name")}.png"),
                 legends=self.structs[self.structs["cluster_centroid"]][
                     "title"
                 ].to_list(),
@@ -488,12 +485,12 @@ class MatExtractor:
         else:
             draw_mols(
                 self.structs["smiles"].apply(Chem.MolFromSmiles).to_list(),
-                os.path.join(output_dir, f"{self.smarts}.png"),
+                os.path.join(output_dir, f"{self.pattern.GetProp("_Name")}.png"),
                 legends=self.structs["title"].to_list(),
                 pattern=self.pattern,
                 **kwargs,
             )
-        logging.info("Draw %s.png", self.smarts)
+        logging.info("Draw %s.png", self.pattern.GetProp("_Name"))
 
 
 def cli(args: argparse.Namespace) -> None:
@@ -514,20 +511,20 @@ def cli(args: argparse.Namespace) -> None:
 
     if args.extractor == "sim":
         query = Chem.MolFromSmiles(args.query)
-        sim_extractor = SimExtractor(
+        sim_extractor = SimExtractor(args.file)
+        sim_extractor.extract(
             query,
             cutoff=args.cutoff,
             upper_cutoff=args.upper_cutoff,
             fp_type=args.fp_type,
             similarity_metric=args.similarity_metric,
         )
-        sim_extractor.extract(args.file)
         sim_extractor.write(args.output_dir, xlsx=args.xlsx, image_size=args.image_size)
-        sim_extractor.draw(args.output_dir, molsPerRow=args.mols_per_row)
+        sim_extractor.draw(args.output_dir, mols_per_row=args.mols_per_row)
     elif args.extractor == "mat":
         pattern = Chem.MolFromSmarts(args.pattern)
-        mat_extractor = MatExtractor(pattern)
-        mat_extractor.extract(args.file)
+        mat_extractor = MatExtractor(args.file)
+        mat_extractor.extract(pattern)
         mat_extractor.cluster(
             cutoff=args.cutoff,
             fp_type=args.fp_type,
@@ -535,7 +532,7 @@ def cli(args: argparse.Namespace) -> None:
         )
         mat_extractor.write(args.output_dir, xlsx=args.xlsx, image_size=args.image_size)
         mat_extractor.draw(
-            args.output_dir, centroid=args.centroid, molsPerRow=args.mols_per_row
+            args.output_dir, centroid=args.centroid, mols_per_row=args.mols_per_row
         )
     else:
         raise ValueError("Invalid extractor.")
@@ -558,14 +555,14 @@ def main() -> None:
     # Similarity extractor
     sim_parser = subparsers.add_parser("sim", help="Extract similar structures")
     sim_parser.add_argument(
-        "query",
-        type=str,
-        help="A query SMILES",
-    )
-    sim_parser.add_argument(
         "file",
         type=str,
         help="A .smi file",
+    )
+    sim_parser.add_argument(
+        "query",
+        type=str,
+        help="A query SMILES",
     )
     sim_parser.add_argument(
         "-o",
@@ -624,11 +621,36 @@ def main() -> None:
     # Match extractor
     mat_parser = subparsers.add_parser("mat", help="Extract matched structures")
     mat_parser.add_argument(
+        "file",
+        type=str,
+        help="A .smi file",
+    )
+    mat_parser.add_argument(
         "pattern",
         type=str,
         help="A SMARTS pattern",
     )
-    mat_parser.add_argument("file", type=str)
+    mat_parser.add_argument(
+        "-c",
+        "--cutoff",
+        type=float,
+        default=0.8,
+        help="Similarity cutoff for clustering",
+    )
+    mat_parser.add_argument(
+        "-f",
+        "--fp-type",
+        type=str,
+        default="topological_torsion",
+        help="Fingerprint type for clustering",
+    )
+    mat_parser.add_argument(
+        "-s",
+        "--similarity-metric",
+        type=str,
+        default="dice",
+        help="Similarity metric for clustering",
+    )
     mat_parser.add_argument(
         "-o",
         "--output-dir",
