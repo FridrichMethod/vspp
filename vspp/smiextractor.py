@@ -18,7 +18,6 @@ from vspp._utils import (
     draw_mols,
     gen_fp,
     is_pains,
-    smart_tqdm,
 )
 
 pandarallel.initialize(progress_bar=True)
@@ -495,3 +494,175 @@ class MatExtractor:
                 **kwargs,
             )
         logging.info("Draw %s.png", self.smarts)
+
+
+def cli(args: argparse.Namespace) -> None:
+    """Command-line interface
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments
+
+    Returns
+    -------
+    None
+    """
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    if args.extractor == "sim":
+        query = Chem.MolFromSmiles(args.query)
+        sim_extractor = SimExtractor(
+            query,
+            cutoff=args.cutoff,
+            upper_cutoff=args.upper_cutoff,
+            fp_type=args.fp_type,
+            similarity_metric=args.similarity_metric,
+        )
+        sim_extractor.extract(args.file)
+        sim_extractor.write(args.output_dir, xlsx=args.xlsx, image_size=args.image_size)
+        sim_extractor.draw(args.output_dir, molsPerRow=args.mols_per_row)
+    elif args.extractor == "mat":
+        pattern = Chem.MolFromSmarts(args.pattern)
+        mat_extractor = MatExtractor(pattern)
+        mat_extractor.extract(args.file)
+        mat_extractor.cluster(
+            cutoff=args.cutoff,
+            fp_type=args.fp_type,
+            similarity_metric=args.similarity_metric,
+        )
+        mat_extractor.write(args.output_dir, xlsx=args.xlsx, image_size=args.image_size)
+        mat_extractor.draw(
+            args.output_dir, centroid=args.centroid, molsPerRow=args.mols_per_row
+        )
+    else:
+        raise ValueError("Invalid extractor.")
+
+
+def main() -> None:
+    """Main function"""
+
+    parser = argparse.ArgumentParser(
+        description="Extract similar or matched structures from a compound library."
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Increase output verbosity",
+    )
+    subparsers = parser.add_subparsers(dest="extractor", required=True)
+
+    # Similarity extractor
+    sim_parser = subparsers.add_parser("sim", help="Extract similar structures")
+    sim_parser.add_argument(
+        "query",
+        type=str,
+        help="A query SMILES",
+    )
+    sim_parser.add_argument(
+        "file",
+        type=str,
+        help="A .smi file",
+    )
+    sim_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="output",
+        help="Output directory",
+    )
+    sim_parser.add_argument(
+        "-c",
+        "--cutoff",
+        type=float,
+        default=0.8,
+        help="Similarity cutoff",
+    )
+    sim_parser.add_argument(
+        "-u",
+        "--upper-cutoff",
+        type=float,
+        default=1.0,
+        help="Upper cutoff for similarity",
+    )
+    sim_parser.add_argument(
+        "-f",
+        "--fp-type",
+        type=str,
+        default="topological_torsion",
+        help="Fingerprint type",
+    )
+    sim_parser.add_argument(
+        "-s",
+        "--similarity-metric",
+        type=str,
+        default="dice",
+        help="Similarity metric",
+    )
+    sim_parser.add_argument(
+        "--xlsx",
+        action="store_true",
+        help="Write an Excel file",
+    )
+    sim_parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=(300, 300),
+        help="Image size",
+    )
+    sim_parser.add_argument(
+        "--mols-per-row",
+        type=int,
+        default=12,
+        help="Number of molecules per row",
+    )
+
+    # Match extractor
+    mat_parser = subparsers.add_parser("mat", help="Extract matched structures")
+    mat_parser.add_argument(
+        "pattern",
+        type=str,
+        help="A SMARTS pattern",
+    )
+    mat_parser.add_argument("file", type=str)
+    mat_parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default="output",
+        help="Output directory",
+    )
+    mat_parser.add_argument(
+        "--xlsx",
+        action="store_true",
+        help="Write an Excel file",
+    )
+    mat_parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=(300, 300),
+        help="Image size",
+    )
+    mat_parser.add_argument(
+        "--centroid",
+        action="store_true",
+        help="Draw only cluster centroids",
+    )
+    mat_parser.add_argument(
+        "--mols-per-row",
+        type=int,
+        default=12,
+        help="Number of molecules per row",
+    )
+
+    args = parser.parse_args()
+    cli(args)
+
+
+if __name__ == "__main__":
+    main()

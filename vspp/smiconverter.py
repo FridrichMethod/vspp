@@ -192,9 +192,7 @@ class SmiConverter:
             file_index,
         )
 
-    def write(
-        self, output_dir: str, file_name: str, chunk_size: int = 0
-    ) -> None:
+    def write(self, output_dir: str, file_name: str, chunk_size: int = 0) -> None:
         """Write the .smi file
 
         Parameters
@@ -292,13 +290,55 @@ def files2smi(
     smi_converter.write(output_dir, file_name, chunk_size)
 
 
-def main():
-    """Main function
+def cli(known_args: argparse.Namespace, args: list[str]):
+    """Command line interface
+
+    Parameters
+    ----------
+    known_args : argparse.Namespace
+        Known arguments
+    args : list[str]
+        Arguments for the filter
 
     Returns
     -------
     None
     """
+
+    args_dict: dict[str, list[float]] = {}
+    key = None
+    for arg in args:
+        if arg.startswith("-"):
+            key = arg
+            args_dict[key] = []
+        elif key is None:
+            raise ValueError(f"Wrong argument: {arg}")
+        else:
+            args_dict[key].append(float(arg))
+
+    filt: dict[str, tuple[float, float]] = {}
+    for key, value in args_dict.items():
+        if len(value) != 2:
+            raise ValueError(f"Wrong number of arguments for {key}")
+        filt[key.replace("-", "")] = tuple(value)  # type: ignore
+
+    files2smi(
+        *known_args.input_files,
+        output_dir=known_args.output_dir,
+        file_name=known_args.file_name,
+        prop=known_args.prop,
+        prefix=known_args.prefix,
+        filt=filt,
+        deduplicate=known_args.deduplicate,
+        sort=known_args.sort,
+        chunk_size=known_args.chunk_size,
+        asynchronous=known_args.asynchronous,
+        multithreaded=known_args.multithreaded,
+    )
+
+
+def main():
+    """Main function"""
 
     parser = argparse.ArgumentParser(description="Convert files to .smi files")
     parser.add_argument("input_files", nargs="+", help="Input files path")
@@ -358,38 +398,8 @@ def main():
         action="store_true",
     )
 
-    args, unknown_args = parser.parse_known_args()
-
-    args_dict: dict[str, list[float]] = {}
-    key = None
-    for arg in unknown_args:
-        if arg.startswith("-"):
-            key = arg
-            args_dict[key] = []
-        elif key is None:
-            raise ValueError(f"Wrong argument: {arg}")
-        else:
-            args_dict[key].append(float(arg))
-
-    filt: dict[str, tuple[float, float]] = {}
-    for key, value in args_dict.items():
-        if len(value) != 2:
-            raise ValueError(f"Wrong number of arguments for {key}")
-        filt[key.replace("-", "")] = tuple(value)  # type: ignore
-
-    files2smi(
-        *args.input_files,
-        output_dir=args.output_dir,
-        file_name=args.file_name,
-        prop=args.prop,
-        prefix=args.prefix,
-        filt=filt,
-        deduplicate=args.deduplicate,
-        sort=args.sort,
-        chunk_size=args.chunk_size,
-        asynchronous=args.asynchronous,
-        multithreaded=args.multithreaded,
-    )
+    known_args, args = parser.parse_known_args()
+    cli(known_args, args)
 
 
 if __name__ == "__main__":
