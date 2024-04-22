@@ -3,11 +3,12 @@ import logging
 import multiprocessing as mp
 import os
 from itertools import chain
-from typing import Any, Callable, Generator, Iterable, Self, Sequence
+from typing import Any, Callable, Generator, Iterable, Literal, Self, Sequence
 from warnings import warn
 
 import numpy as np
 import pandas as pd
+from numba import float32, int64, vectorize
 from PIL import Image
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog, PandasTools
@@ -194,7 +195,7 @@ def calc_bulk_sim(
 
 def calc_descs(
     mol: Chem.rdchem.Mol,
-    *args: str,
+    *args: Sequence[str],
 ) -> float | tuple[float, ...]:
     """Calculate molecular descriptors
 
@@ -202,8 +203,8 @@ def calc_descs(
     ----------
     mol : rdkit.Chem.rdchem.Mol
         A molecule
-    args : str
-        A single descriptor name or descriptor names, by default `DESC_NAMES`.
+    args : Sequence[str],
+        Descriptor names, by default `DESC_NAMES`.
 
     Returns
     -------
@@ -260,18 +261,25 @@ def calc_sim(
 
 
 def cluster_fps(
-    fps: Sequence[FingerPrint],
+    fps: Sequence[Any],
     cutoff: float = 0.6,
     similarity_metric: str = "tanimoto",
+    *,
+    multiprocessing: bool = False,
 ) -> list[tuple[int, ...]]:
-    """Cluster the molecules by their Morgan fingerprints
+    """Cluster the molecules by their fingerprints
 
     Parameters
     ----------
-    fps : Sequence[rdkit.DataStructs.cDataStructs.ExplicitBitVect]
-        A list of Morgan fingerprints
+    fps : Sequence[Any]
+        A list of fingerprints bit vectors
     cutoff : float, optional
-        Tanimoto similarity cutoff, by default 0.6
+        Similarity cutoff, by default 0.6
+    similarity_metric : str, optional
+        Similarity metric, by default 'tanimoto'
+    multiprocessing : bool, optional
+        Whether to use multiprocessing to calculate distance map, by default False
+        `fps` should be a 2D numpy.ndarray with shape (n_mols, n_bits) if `multiprocessing` is True
 
     Returns
     -------
@@ -283,14 +291,41 @@ def cluster_fps(
 
     # Calculate the distance matrix
     logging.info("Calculating distances...")
-    distances = [
-        1 - calc_sim(fps[i], fps[j], similarity_metric)
-        for i in range(nfps)
-        for j in range(i)
-    ]
-    logging.info("Distance map is generated successfully!")
 
-    # Cluster the molecules by their Morgan fingerprints
+    if multiprocessing:
+        if similarity_metric == "tanimoto":
+
+            @vectorize([float32(int64)], target="parallel")
+            def _calc_tanimoto_dist(n: int) -> float:
+                i = int(np.sqrt(n + 1 / 8) * np.sqrt(2) + 1 / 2)
+                j = n - i * (i - 1) // 2
+                return 1 - np.sum(fps[i] & fps[j]) / np.sum(fps[i] | fps[j])
+
+            distances = _calc_tanimoto_dist(np.arange(nfps * (nfps - 1) // 2))  # type: ignore
+        elif similarity_metric == "dice":
+
+            @vectorize([float32(int64)], target="parallel")
+            def _calc_dice_dist(n: int) -> float:
+                i = int(np.sqrt(n + 1 / 8) * np.sqrt(2) + 1 / 2)
+                j = n - i * (i - 1) // 2
+                return 1 - 2 * np.sum(fps[i] & fps[j]) / (
+                    np.sum(fps[i]) + np.sum(fps[j])
+                )
+
+            distances = _calc_dice_dist(np.arange(nfps * (nfps - 1) // 2))  # type: ignore
+        else:
+            raise ValueError(
+                "`similarity_metric` should be one of 'tanimoto' and 'dice'."
+            )
+    else:
+        distances = np.empty(nfps * (nfps - 1) // 2)
+        for i in smart_tqdm(range(1, nfps)):
+            distances[i * (i - 1) // 2 : i * (i + 1) // 2] = calc_bulk_sim(
+                fps[i], fps[:i], similarity_metric
+            )
+        distances = 1 - distances
+
+    # Cluster the molecules by their fingerprints
     logging.info("Start clustering...")
     clusters = list(Butina.ClusterData(distances, nfps, 1 - cutoff, isDistData=True))
     logging.info("Molecules are clustered successfully!")
