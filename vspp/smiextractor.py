@@ -321,20 +321,26 @@ def write_df(
         raise ValueError("No molecules are provided")
 
     if output_file.endswith(".xlsx"):
+        df_copy = df.copy()
+        # Convert boolean columns to integer
+        # Note: PandasTools.SaveXlsxFromFrame does not support boolean columns
+        for col in df_copy.columns:
+            if df_copy[col].dtype == bool:
+                df_copy[col] = df_copy[col].astype(int)
         PandasTools.AddMoleculeColumnToFrame(
-            df, "smiles", "mol", includeFingerprints=True
+            df_copy, "smiles", "mol", includeFingerprints=True
         )
         logging.info("Molecular structures are added to dataframe.")
         PandasTools.SaveXlsxFromFrame(
-            df,
+            df_copy,
             output_file,
             molCol="mol",
             size=image_size,
         )
-        logging.info("Write %s.xlsx", os.path.basename(output_file))
+        logging.info("Write %s", os.path.basename(output_file))
     elif output_file.endswith(".csv"):
         df.to_csv(output_file, index=False)
-        logging.info("Write %s.csv", os.path.basename(output_file))
+        logging.info("Write %s", os.path.basename(output_file))
     else:
         raise ValueError("Unsupported output format")
 
