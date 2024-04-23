@@ -2,6 +2,7 @@ import gzip
 import logging
 import multiprocessing as mp
 import os
+from collections import defaultdict
 from itertools import chain
 from typing import Any, Callable, Generator, Iterable, Literal, Self, Sequence
 from warnings import warn
@@ -12,10 +13,11 @@ from numba import float32, int64, vectorize
 from PIL import Image
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog, PandasTools
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Cluster import Butina
 from rdkit.ML.Descriptors import MoleculeDescriptors
-from tqdm import tqdm
-from tqdm.notebook import tqdm as tqdm_notebook
+from tqdm.auto import tqdm
+from tqdm.contrib.concurrent import process_map
 
 type FingerPrint = DataStructs.cDataStructs.ExplicitBitVect
 
@@ -280,6 +282,7 @@ def cluster_fps(
     multiprocessing : bool, optional
         Whether to use multiprocessing to calculate distance map, by default False
         `fps` should be a 2D numpy.ndarray with shape (n_mols, n_bits) if `multiprocessing` is True
+        `multiprocessing` only supports 'tanimoto' and 'dice' similarity metrics
 
     Returns
     -------
@@ -319,19 +322,61 @@ def cluster_fps(
             )
     else:
         distances = np.empty(nfps * (nfps - 1) // 2)
-        for i in smart_tqdm(range(1, nfps)):
+        for i in tqdm(range(1, nfps)):
             distances[i * (i - 1) // 2 : i * (i + 1) // 2] = calc_bulk_sim(
                 fps[i], fps[:i], similarity_metric
             )
         distances = 1 - distances
 
     # Cluster the molecules by their fingerprints
-    logging.info("Start clustering...")
+    logging.info("Clustering...")
     clusters = list(Butina.ClusterData(distances, nfps, 1 - cutoff, isDistData=True))
     logging.info("Molecules are clustered successfully!")
 
     # Sort the clusters by the number of molecules in each cluster
     clusters.sort(key=len, reverse=True)
+
+    return clusters
+
+
+def cluster_frameworks(
+    smi: Sequence[str],
+    *,
+    generic: bool = False,
+) -> dict[str, tuple[int, ...]]:
+    """Cluster the molecules by their frameworks
+
+    Parameters
+    ----------
+    smi : Sequence[str]
+        A list of SMILES strings
+    generic : bool, optional
+        Whether to make the scaffold generic, by default False
+
+    Returns
+    -------
+    clusters : dict[str, tuple[int, ...]]
+        A dictionary of clusters sorted by cluster size
+    """
+
+    nsmi = len(smi)
+
+    logging.info("Generating frameworks...")
+
+    framework_smi = list(
+        map(
+            lambda x: get_framework(x, generic=generic),
+            tqdm(smi, desc="Generating frameworks", total=nsmi, unit="mol"),
+        )
+    )
+
+    index_dict: defaultdict[str, tuple[int, ...]] = defaultdict(tuple)
+    for index, value in enumerate(framework_smi):
+        index_dict[value] += (index,)
+
+    clusters = dict(sorted(index_dict.items(), key=lambda x: len(x[1]), reverse=True))
+
+    logging.info("Molecules are clustered successfully!")
 
     return clusters
 
@@ -497,6 +542,43 @@ def gen_fp(
             )
 
 
+def get_framework(
+    mol: Chem.rdchem.Mol | str, *, generic: bool = False
+) -> Chem.rdchem.Mol | str:
+    """Get the Murcko scaffold of a molecule
+
+    Parameters
+    ----------
+    mol : rdkit.Chem.rdchem.Mol | str
+        A molecule or a SMILES string
+    generic : bool, optional
+        Whether to make the scaffold generic, by default False
+
+    Returns
+    -------
+    scaffold : rdkit.Chem.rdchem.Mol | str
+        Generic Murcko scaffold of the molecule
+    """
+
+    match isinstance(mol, str), generic:
+        case False, False:
+            return MurckoScaffold.GetScaffoldForMol(mol)
+        case False, True:
+            return MurckoScaffold.MakeScaffoldGeneric(
+                MurckoScaffold.GetScaffoldForMol(mol)
+            )
+        case True, False:
+            return MurckoScaffold.MurckoScaffoldSmilesFromSmiles(mol)
+        case True, True:
+            return Chem.MolToSmiles(
+                MurckoScaffold.MakeScaffoldGeneric(
+                    MurckoScaffold.GetScaffoldForMol(Chem.MolFromSmiles(mol))
+                )
+            )
+        case _:
+            assert False
+
+
 def is_pains(mol: Chem.rdchem.Mol) -> bool:
     """Identify and filiter out PAINS compounds
 
@@ -515,33 +597,3 @@ def is_pains(mol: Chem.rdchem.Mol) -> bool:
     params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS)
     catalog = FilterCatalog.FilterCatalog(params)
     return catalog.HasMatch(mol)
-
-
-def smart_tqdm(iterable: Iterable, *args, **kwargs) -> tqdm | tqdm_notebook:
-    """Smart tqdm
-
-    Parameters
-    ----------
-    iterable : Iterable
-        An iterable object
-    args : tuple
-        Positional arguments for tqdm
-    kwargs : dict
-        Keyword arguments for tqdm
-
-    Returns
-    -------
-    tqdm : tqdm.tqdm | tqdm.notebook.tqdm
-        A tqdm object
-    """
-
-    try:
-        # Use get_ipython() in Jupyter notebook
-        shell = get_ipython().__class__.__name__  # type: ignore
-        if shell == "ZMQInteractiveShell":
-            return tqdm_notebook(
-                iterable, *args, **kwargs
-            )  # Jupyter notebook or qtconsole
-        raise RuntimeError  # Not in Jupyter, raise an error to trigger the fallback
-    except (NameError, RuntimeError):
-        return tqdm(iterable, *args, **kwargs)  # Probably standard Python interpreter

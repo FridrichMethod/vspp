@@ -12,7 +12,7 @@ from pandarallel import pandarallel
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 
-from vspp._utils import calc_bulk_sim, calc_descs, cluster_fps, gen_fp, is_pains
+from vspp._utils import calc_bulk_sim, calc_descs, cluster_fps, gen_fp, is_pains, cluster_frameworks, get_framework
 
 pandarallel.initialize(progress_bar=True)
 
@@ -167,12 +167,13 @@ def extract_pattern(
     return df_copy
 
 
-def cluster_df(
+def cluster_df_fps(
     df: pd.DataFrame,
     *,
     cutoff: float = 0.6,
     fp_type: str = "morgan",
     similarity_metric: str = "tanimoto",
+    **kwargs: Any,
 ) -> pd.DataFrame:
     """Cluster match structures
 
@@ -186,6 +187,8 @@ def cluster_df(
         Fingerprint type, by default "morgan"
     similarity_metric : str, optional
         Similarity metric, by default "tanimoto"
+    kwargs : Any
+        Additional arguments for `cluster_fps`
 
     Returns
     -------
@@ -207,7 +210,7 @@ def cluster_df(
         )
     )
 
-    clusters = cluster_fps(fps, cutoff, similarity_metric, multiprocessing=True)  # type: ignore
+    clusters = cluster_fps(fps, cutoff, similarity_metric, **kwargs)  # type: ignore
 
     df_copy[["cluster_id", "cluster_size", "cluster_centroid"]] = (
         pd.DataFrame.from_dict(
@@ -215,6 +218,45 @@ def cluster_df(
                 idx: (i, len(cluster), j == 0)
                 for i, cluster in enumerate(clusters)
                 for j, idx in enumerate(cluster)
+            },
+            orient="index",
+        )
+    )
+
+    df_copy = df_copy.sort_values(by=["cluster_id", "title"]).reset_index(drop=True)
+
+    return df_copy
+
+
+def cluster_df_frameworks(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """Cluster frameworks
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A dataframe containing molecular structures
+    kwargs : Any
+        Additional arguments for `cluster_frameworks`
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe with cluster information
+    """
+
+    if df.empty:
+        raise ValueError("No molecules are provided")
+
+    df_copy = df.copy()
+
+    clusters = cluster_frameworks(df_copy["smiles"], **kwargs)  # type: ignore
+
+    df_copy[["cluster_id", "cluster_size", "cluster_framework"]] = (
+        pd.DataFrame.from_dict(
+            {
+                idx: (i, len(cluster), framework)
+                for i, (framework, cluster) in enumerate(clusters.items())
+                for idx in cluster
             },
             orient="index",
         )
@@ -298,6 +340,7 @@ def gen_df_info(df: pd.DataFrame, *args) -> pd.DataFrame:
 def write_df(
     df: pd.DataFrame,
     output_file: str,
+    smi_col: str = "smiles",
     *,
     image_size: tuple = (300, 300),
 ) -> None:
@@ -309,6 +352,8 @@ def write_df(
         A dataframe containing molecular structures
     output_file : str
         Path to the output file
+    smi_col : str, optional
+        Column name for SMILES, by default "smiles"
     image_size : tuple, optional
         Image size, by default (300, 300)
 
@@ -328,7 +373,7 @@ def write_df(
             if df_copy[col].dtype == bool:
                 df_copy[col] = df_copy[col].astype(int)
         PandasTools.AddMoleculeColumnToFrame(
-            df_copy, "smiles", "mol", includeFingerprints=True
+            df_copy, smi_col, "mol", includeFingerprints=True
         )
         logging.info("Molecular structures are added to dataframe.")
         PandasTools.SaveXlsxFromFrame(

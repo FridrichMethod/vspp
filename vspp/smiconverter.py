@@ -10,8 +10,9 @@ from warnings import warn
 
 import nest_asyncio
 from rdkit import Chem
+from tqdm.auto import tqdm
 
-from vspp._utils import MolSupplier, filt_descs, smart_tqdm
+from vspp._utils import MolSupplier, filt_descs
 
 
 class SmiConverter:
@@ -68,11 +69,7 @@ class SmiConverter:
     ) -> None:
         """Generate the molecules in the file asynchronously and put them in the queue"""
 
-        for mol in smart_tqdm(
-            MolSupplier(file, multithreaded=multithreaded),
-            desc="Converting",
-            unit="mol",
-        ):
+        for mol in MolSupplier(file, multithreaded=multithreaded):
             if (mol is not None) and filt_descs(mol, self.filt):
                 await q.put(mol)
 
@@ -98,7 +95,7 @@ class SmiConverter:
         )
         consumer = asyncio.create_task(self._async_process_mols(q))
 
-        await asyncio.gather(producer, consumer)
+        await tqdm.gather(producer, consumer)
 
     def convert(
         self, *args: str, asynchronous: bool = False, multithreaded: bool = False
@@ -125,7 +122,7 @@ class SmiConverter:
                 asyncio.run(self._async_convert(file, multithreaded=multithreaded))
         else:
             for file in args:
-                for mol in smart_tqdm(
+                for mol in tqdm(
                     MolSupplier(file, multithreaded=multithreaded),
                     desc="Converting",
                     unit="mol",
