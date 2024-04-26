@@ -78,7 +78,12 @@ class AnalogueClient:
         return ""
 
     def select_molecule(self, molecule_title: str):
-        self.selected_molecules.add(molecule_title)
+        if self.library is None:
+            messagebox.showerror("Error", "Library not loaded")
+        elif molecule_title in self.library.index:
+            self.selected_molecules.add(molecule_title)
+        else:
+            messagebox.showerror("Error", "Molecule not found")
 
     def remove_selection(self, molecule_title: str):
         if molecule_title in self.selected_molecules:
