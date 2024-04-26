@@ -49,7 +49,9 @@ class AnalogueClient:
             messagebox.showerror("Error", "Invalid file format")
 
     def check_framework(self, framework_smiles: str) -> str:
-        if (framework := Chem.MolFromSmiles(framework_smiles)) is None:
+        if (not framework_smiles) or (
+            (framework := Chem.MolFromSmiles(framework_smiles)) is None
+        ):
             messagebox.showerror("Error", "Invalid SMILES")
         else:
             return Chem.MolToSmiles(framework)
