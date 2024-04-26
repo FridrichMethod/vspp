@@ -8,7 +8,7 @@ from rdkit import Chem
 from rdkit.Chem import Draw, PandasTools
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from vspp._pd_utils import cluster_df_frameworks, smi2df
+from vspp._pd_utils import cluster_df_frameworks, smi2df, gen_df_info
 from vspp._utils import draw_mol
 
 
@@ -107,6 +107,7 @@ class AnalogueClient:
             selected_molecules = self.library[
                 self.library.index.isin(self.selected_molecules)
             ]
+            selected_molecules = gen_df_info(selected_molecules)
             selected_molecules.to_csv(output_path)
             messagebox.showinfo(
                 "Success",
