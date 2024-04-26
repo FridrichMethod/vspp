@@ -6,6 +6,7 @@ import pandas as pd
 from PIL import Image, ImageTk
 from rdkit import Chem
 from rdkit.Chem import Draw, PandasTools
+from rdkit.Chem.Scaffolds import MurckoScaffold
 
 from vspp._pd_utils import cluster_df_frameworks, smi2df
 from vspp._utils import draw_mol
@@ -54,7 +55,7 @@ class AnalogueClient:
         ):
             messagebox.showerror("Error", "Invalid SMILES")
         else:
-            return Chem.MolToSmiles(framework)
+            return MurckoScaffold.MurckoScaffoldSmiles(mol=framework)
         return ""
 
     def extract_molecules(self, framework_smiles: str) -> list[str]:
