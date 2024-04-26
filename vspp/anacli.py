@@ -98,6 +98,10 @@ class AnalogueClient:
             messagebox.showerror("Error", "Library not loaded")
         elif not self.selected_molecules:
             messagebox.showerror("Error", "No molecules selected")
+        elif not output_path:
+            messagebox.showerror("Error", "No output path provided")
+        elif not output_path.endswith(".csv"):
+            messagebox.showerror("Error", "Invalid output format")
         else:
             selected_molecules = self.library[
                 self.library.index.isin(self.selected_molecules)
