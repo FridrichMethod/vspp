@@ -2,7 +2,6 @@ import gzip
 import logging
 import multiprocessing as mp
 import os
-from collections import defaultdict
 from itertools import chain
 from typing import Any, Callable, Generator, Iterable, Literal, Self, Sequence
 from warnings import warn
@@ -13,7 +12,6 @@ from numba import float32, int64, vectorize
 from PIL import Image
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Descriptors, Draw, FilterCatalog, PandasTools
-from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Cluster import Butina
 from rdkit.ML.Descriptors import MoleculeDescriptors
 from tqdm.auto import tqdm
@@ -54,8 +52,6 @@ class MolSupplier:
     ----------
     file : str
         Path to the input file
-    extension : str
-        File extension
     multithreaded : bool
         Whether to use multithreading
     thread_num : int
@@ -88,47 +84,55 @@ class MolSupplier:
     _THREAD_NUM: int = 0
     _QUEUE_SIZE: int = 1000
 
-    def __init__(self, file: str, *, multithreaded=False) -> None:
+    def __init__(self, file: str, *, multithreaded=False, **kwargs) -> None:
 
         match os.path.splitext(file)[1].lower(), multithreaded:
             case ".sdf", False:
-                self.mol_supplier = Chem.SDMolSupplier(file)
+                self.mol_supplier = Chem.SDMolSupplier(file, **kwargs)
             case ".sdf", True:
                 self.mol_supplier = Chem.MultithreadedSDMolSupplier(
                     file,
                     numWriterThreads=self._THREAD_NUM,
                     sizeInputQueue=self._QUEUE_SIZE,
                     sizeOutputQueue=self._QUEUE_SIZE,
+                    **kwargs,
                 )
             case ".sdfgz", False:
-                self.mol_supplier = Chem.SDMolSupplier(gzip.open(file))
+                self.mol_supplier = Chem.SDMolSupplier(gzip.open(file), **kwargs)
             case ".sdfgz", True:
                 self.mol_supplier = Chem.MultithreadedSDMolSupplier(
                     gzip.open(file),
                     numWriterThreads=self._THREAD_NUM,
                     sizeInputQueue=self._QUEUE_SIZE,
                     sizeOutputQueue=self._QUEUE_SIZE,
+                    **kwargs,
                 )
             case ".mae", False:
-                self.mol_supplier = Chem.MaeMolSupplier(file)
+                self.mol_supplier = Chem.MaeMolSupplier(file, **kwargs)
             case ".mae", True:
                 raise TypeError("Multithreading is not supported for .mae files.")
             case ".maegz", False:
-                self.mol_supplier = Chem.MaeMolSupplier(gzip.open(file))
+                self.mol_supplier = Chem.MaeMolSupplier(gzip.open(file), **kwargs)
             case ".maegz", True:
                 raise TypeError("Multithreading is not supported for .maegz files.")
             case ".smi", False:
-                self.mol_supplier = Chem.SmilesMolSupplier(file)
+                self.mol_supplier = Chem.SmilesMolSupplier(
+                    file, titleLine=False, **kwargs
+                )
             case ".smi", True:
                 self.mol_supplier = Chem.MultithreadedSmilesMolSupplier(
                     file,
+                    titleLine=False,
                     numWriterThreads=self._THREAD_NUM,
                     sizeInputQueue=self._QUEUE_SIZE,
                     sizeOutputQueue=self._QUEUE_SIZE,
+                    **kwargs,
                 )
             case ".smr", False:
                 with open(file, "r", encoding="utf-8") as f:
-                    self.mol_supplier = (Chem.MolFromSmarts(line) for line in f)
+                    self.mol_supplier = (
+                        Chem.MolFromSmarts(line, **kwargs) for line in f
+                    )
             case _:
                 raise TypeError("Should be a .sdf, .sdfgz, .mae, .maegz or .smi file.")
 
@@ -296,6 +300,10 @@ def cluster_fps(
     logging.info("Calculating distances...")
 
     if multiprocessing:
+        if not (isinstance(fps, np.ndarray) and fps.ndim == 2):
+            raise ValueError(
+                "`fps` should be a 2D numpy.ndarray with shape (n_mols, n_bits)."
+            )
         if similarity_metric == "tanimoto":
 
             @vectorize([float32(int64)], target="parallel")
@@ -339,46 +347,57 @@ def cluster_fps(
     return clusters
 
 
-def cluster_frameworks(
-    smi: Sequence[str],
+def draw_mol(
+    mol: Chem.rdchem.Mol,
     *,
-    generic: bool = False,
-) -> dict[str, tuple[int, ...]]:
-    """Cluster the molecules by their frameworks
+    pattern: Chem.rdchem.Mol | None = None,
+    img_size: tuple[float, float] = (300, 300),
+) -> Image.Image | None:
+    """Draw molecules
 
     Parameters
     ----------
-    smi : Sequence[str]
-        A list of SMILES strings
-    generic : bool, optional
-        Whether to make the scaffold generic, by default False
+    mol : rdkit.Chem.rdchem.Mol
+        A molecule
+    pattern : Chem.rdchem.Mol | None, optional
+        SMARTS pattern to align and highlight the substructure, by default None
+    img_size : tuple[float, float], optional
+        Size of the image, by default (600, 600)
 
     Returns
     -------
-    clusters : dict[str, tuple[int, ...]]
-        A dictionary of clusters sorted by cluster size
+    img : PIL.Image.Image | None
+        A PIL image
     """
 
-    nsmi = len(smi)
+    Chem.rdDepictor.SetPreferCoordGen(True)
 
-    logging.info("Generating frameworks...")
+    if pattern is None:
+        highlight_atoms = []
+        highlight_bonds = []
+    else:
+        AllChem.Compute2DCoords(pattern)
+        if mol.HasSubstructMatch(pattern):
+            # Align the molecule to the pattern
+            AllChem.GenerateDepictionMatching2DStructure(mol, pattern)
+            # Highlight the substructure
+            highlight_atoms = list(mol.GetSubstructMatch(pattern))
+            highlight_bonds = [
+                mol.GetBondBetweenAtoms(
+                    highlight_atoms[bond.GetBeginAtomIdx()],
+                    highlight_atoms[bond.GetEndAtomIdx()],
+                ).GetIdx()
+                for bond in pattern.GetBonds()
+            ]
+        else:
+            warn("The pattern is not found in the molecule.")
 
-    framework_smi = list(
-        map(
-            lambda x: get_framework(x, generic=generic),
-            tqdm(smi, desc="Generating frameworks", total=nsmi, unit="mol"),
-        )
+    return Draw.MolToImage(  # type: ignore
+        mol,
+        size=img_size,
+        highlightAtoms=highlight_atoms,
+        highlightBonds=highlight_bonds,
     )
-
-    index_dict: defaultdict[str, tuple[int, ...]] = defaultdict(tuple)
-    for index, value in enumerate(framework_smi):
-        index_dict[value] += (index,)
-
-    clusters = dict(sorted(index_dict.items(), key=lambda x: len(x[1]), reverse=True))
-
-    logging.info("Molecules are clustered successfully!")
-
-    return clusters
 
 
 def draw_mols(
@@ -560,23 +579,20 @@ def get_framework(
         Generic Murcko scaffold of the molecule
     """
 
-    match isinstance(mol, str), generic:
-        case False, False:
-            return MurckoScaffold.GetScaffoldForMol(mol)
-        case False, True:
-            return MurckoScaffold.MakeScaffoldGeneric(
-                MurckoScaffold.GetScaffoldForMol(mol)
-            )
-        case True, False:
-            return MurckoScaffold.MurckoScaffoldSmilesFromSmiles(mol)
-        case True, True:
+    if isinstance(mol, str):
+        if generic:
             return Chem.MolToSmiles(
                 MurckoScaffold.MakeScaffoldGeneric(
                     MurckoScaffold.GetScaffoldForMol(Chem.MolFromSmiles(mol))
                 )
             )
-        case _:
-            assert False
+        return MurckoScaffold.MurckoScaffoldSmilesFromSmiles(mol)
+    else:
+        if generic:
+            return MurckoScaffold.MakeScaffoldGeneric(
+                MurckoScaffold.GetScaffoldForMol(mol)
+            )
+        return MurckoScaffold.GetScaffoldForMol(mol)
 
 
 def is_pains(mol: Chem.rdchem.Mol) -> bool:
