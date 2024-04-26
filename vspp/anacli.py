@@ -197,8 +197,10 @@ class AnalogueGUI:
     def _update_combobox(self, titles: list[str], combobox: ttk.Combobox):
         combobox["values"] = titles
 
-    def _clear_combobox(self, combobox: ttk.Combobox):
+    def _clear_combobox(self, combobox: ttk.Combobox, *, clear: bool = False):
         combobox.set("")
+        if clear:
+            combobox["values"] = []
 
     def _update_image(self, smiles, label, *, pattern: Chem.rdchem.Mol | None = None):
         try:
@@ -248,7 +250,7 @@ class AnalogueGUI:
         self.framework_entry.delete(0, tk.END)
         self._clear_image(self.framework_image_label)
         self._clear_image(self.molecule_image_label)
-        self._clear_combobox(self.molecule_combobox)
+        self._clear_combobox(self.molecule_combobox, clear=True)
 
     def display_molecule(self, event: tk.Event):
         molecule_title = self.molecule_combobox.get()
