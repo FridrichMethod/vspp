@@ -30,7 +30,7 @@ class AnalogueClient:
             )  # Molecules without rings will be removed
             messagebox.showinfo(
                 "Success",
-                f"Library loaded successfully\n{len(self.library)} molecules found",
+                f"Library loaded successfully\n{len(self.library)} molecules found\n{len(self.frameworks)} frameworks",
             )
         elif input_path.endswith(".csv"):
             self.library = pd.read_csv(input_path)
@@ -39,7 +39,10 @@ class AnalogueClient:
                 self.frameworks = self.library.dropna().drop_duplicates(
                     subset="cluster_framework"
                 )
-                messagebox.showinfo("Success", "Library loaded successfully")
+                messagebox.showinfo(
+                    "Success",
+                    f"Library loaded successfully\n{len(self.library)} molecules found\n{len(self.frameworks)} frameworks",
+                )
             else:
                 messagebox.showerror("Error", "Invalid library format")
         else:
@@ -92,7 +95,7 @@ class AnalogueClient:
             selected_molecules = self.library[
                 self.library.index.isin(self.selected_molecules)
             ]
-            selected_molecules.to_csv(output_path, index=False)
+            selected_molecules.to_csv(output_path)
             messagebox.showinfo(
                 "Success",
                 f"Analogues saved successfully\n{len(selected_molecules)} molecules saved",
