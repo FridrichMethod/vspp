@@ -150,7 +150,7 @@ class AnalogueGUI:
         # Molecule selection
         self.molecule_label = tk.Label(self.root, text="Select Molecule:")
         self.molecule_label.grid(row=1, column=4)
-        self.molecule_combobox = ttk.Combobox(self.root)
+        self.molecule_combobox = ttk.Combobox(self.root, state="readonly")
         self.molecule_combobox.grid(row=1, column=5)
         self.molecule_combobox.bind("<<ComboboxSelected>>", self.display_molecule)
         self.molecule_select_button = tk.Button(
@@ -161,7 +161,7 @@ class AnalogueGUI:
         # View selection
         self.view_label = tk.Label(self.root, text="View Selection:")
         self.view_label.grid(row=3, column=0)
-        self.view_combobox = ttk.Combobox(self.root)
+        self.view_combobox = ttk.Combobox(self.root, state="readonly")
         self.view_combobox.grid(row=3, column=1)
         self.view_combobox.bind("<<ComboboxSelected>>", self.display_selection)
         self.molecule_deselect_button = tk.Button(
