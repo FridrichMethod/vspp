@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -5,30 +6,28 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageTk
 from rdkit import Chem
-from rdkit.Chem import Draw, PandasTools
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from vspp._pd_utils import cluster_df_frameworks, smi2df, gen_df_info
+from vspp._pd_utils import cluster_df_frameworks, gen_df_info, smi2df
 from vspp._utils import draw_mol
+from vspp.smiextractor import extract_query
 
 
 class AnalogueClient:
     def __init__(self) -> None:
-        self.library: pd.DataFrame | None = None
-        self.frameworks: pd.DataFrame | None = None
-        self.current_framework: str = ""
+        self.library: pd.DataFrame = pd.DataFrame()
+        self.frameworks: pd.DataFrame = pd.DataFrame()
         self.selected_molecules: set[str] = set()
 
     def load_library(self, input_path: str) -> None:
-        if input_path.endswith(".smi"):
-            messagebox.showwarning(
-                "Warning",
-                "Loading a large library may take a while\nPlease be patient",
-            )
+        if not input_path:
+            pass
+        elif input_path.endswith(".smi"):
             self.library = cluster_df_frameworks(smi2df(input_path)).set_index("title")
             self.frameworks = self.library.dropna().drop_duplicates(
                 subset="cluster_framework"
             )  # Molecules without rings will be removed
+            self.library.to_csv(f"{os.path.splitext(input_path)[0]}_clustered.csv")
             messagebox.showinfo(
                 "Success",
                 f"Library loaded successfully\n{len(self.library)} molecules found\n{len(self.frameworks)} frameworks",
@@ -45,64 +44,79 @@ class AnalogueClient:
                     f"Library loaded successfully\n{len(self.library)} molecules found\n{len(self.frameworks)} frameworks",
                 )
             else:
-                messagebox.showerror("Error", "Invalid library format")
+                messagebox.showerror("Error", "Invalid file format")
         else:
             messagebox.showerror("Error", "Invalid file format")
 
-    def check_framework(self, framework_smiles: str) -> str:
-        if (not framework_smiles) or (
-            (framework := Chem.MolFromSmiles(framework_smiles)) is None
-        ):
+    def check_smiles(self, smiles: str) -> str:
+        if not smiles:
+            messagebox.showerror("Error", "No SMILES provided")
+        elif (query := Chem.MolFromSmiles(smiles)) is None:
             messagebox.showerror("Error", "Invalid SMILES")
         else:
-            return MurckoScaffold.MurckoScaffoldSmiles(mol=framework)
+            return Chem.MolToSmiles(query)
         return ""
 
-    def extract_molecules(self, framework_smiles: str) -> list[str]:
-        if self.library is None:
-            messagebox.showerror("Error", "Library not loaded")
-        elif self.frameworks is None:
+    def search_frameworks(self, framework_smiles: str) -> list[str]:
+        if self.frameworks.empty:
             messagebox.showerror("Error", "Frameworks not generated")
-        elif framework_smiles:
-            if framework_smiles in self.frameworks["cluster_framework"].values:
-                self.current_framework = framework_smiles
-                return self.library[
-                    self.library["cluster_framework"] == framework_smiles
-                ].index.tolist()
-            else:
-                messagebox.showerror("Error", "Framework not found")
+        elif not framework_smiles:
+            messagebox.showerror("Error", "No SMILES provided")
+        elif frameworks := extract_query(
+            self.frameworks,
+            Chem.MolFromSmiles(framework_smiles),
+            smi_col="cluster_framework",
+            cutoff=0.8,
+        )["cluster_framework"].to_list():
+            messagebox.showinfo(
+                "Success",
+                f"{len(frameworks)} framework(s) found",
+            )
+            return frameworks
+        else:
+            messagebox.showerror("Error", "No frameworks found")
         return []
 
-    def title2smiles(self, title: str) -> str:
-        if self.library is None:
+    def extract_molecules(self, framework_smiles: str) -> list[str]:
+        if self.library.empty:
             messagebox.showerror("Error", "Library not loaded")
-        elif title:
-            return str(self.library.loc[title, "smiles"])
-        return ""
+        elif self.frameworks.empty:
+            messagebox.showerror("Error", "Frameworks not generated")
+        elif not framework_smiles:
+            messagebox.showerror("Error", "No SMILES provided")
+        elif framework_smiles in self.frameworks["cluster_framework"].values:
+            return self.library[
+                self.library["cluster_framework"] == framework_smiles
+            ].index.to_list()
+        else:
+            messagebox.showerror("Error", "Framework not found")
+        return []
 
-    def select_molecule(self, molecule_title: str):
-        if self.library is None:
+    def select_molecule(self, molecule_title: str) -> None:
+        if self.library.empty:
             messagebox.showerror("Error", "Library not loaded")
         elif molecule_title in self.library.index:
             self.selected_molecules.add(molecule_title)
         else:
             messagebox.showerror("Error", "Molecule not found")
 
-    def remove_selection(self, molecule_title: str):
-        if molecule_title in self.selected_molecules:
+    def remove_selection(self, molecule_title: str) -> None:
+        if not self.selected_molecules:
+            messagebox.showerror("Error", "No molecules selected")
+        elif molecule_title in self.selected_molecules:
             self.selected_molecules.remove(molecule_title)
         else:
             messagebox.showerror("Error", "Molecule not selected")
 
-    def save_analogues(self, output_path: str):
-        if self.library is None:
+    def save_analogues(self, output_path: str) -> None:
+        if self.library.empty:
             messagebox.showerror("Error", "Library not loaded")
         elif not self.selected_molecules:
             messagebox.showerror("Error", "No molecules selected")
         elif not output_path:
-            messagebox.showerror("Error", "No output path provided")
+            pass
         elif not output_path.endswith(".csv"):
-            messagebox.showerror("Error", "Invalid output format")
+            messagebox.showerror("Error", "Invalid file format")
         else:
             selected_molecules = self.library[
                 self.library.index.isin(self.selected_molecules)
@@ -117,97 +131,153 @@ class AnalogueClient:
 
 class AnalogueGUI:
     def __init__(self, root: tk.Tk, client: AnalogueClient):
-        self.root = root
-        self.client = client
+        self.root: tk.Tk = root
+        self.client: AnalogueClient = client
+        self.current_framework: str = ""
         self.root.title("Analogue Search")
 
-        # Library file
-        self.load_label = tk.Label(self.root, text="Input Library Path:")
-        self.load_label.grid(row=0, column=0)
-        self.load_entry = tk.Entry(self.root)
-        self.load_entry.grid(row=0, column=1)
-        self.library_browse_button = tk.Button(
+        # Load library
+        self.load_library_label = tk.Label(self.root, text="Input Library Path:")
+        self.load_library_label.grid(row=0, column=0)
+        self.load_library_entry = tk.Entry(self.root)
+        self.load_library_entry.grid(row=0, column=1)
+        self.load_library_browse_button = tk.Button(
             self.root, text="Browse", command=self.browse_input
         )
-        self.library_browse_button.grid(row=0, column=2)
-        self.library_load_button = tk.Button(
+        self.load_library_browse_button.grid(row=0, column=2)
+        self.load_library_load_button = tk.Button(
             self.root, text="Load", command=self.load_library
         )
-        self.library_load_button.grid(row=0, column=3)
+        self.load_library_load_button.grid(row=0, column=3)
 
-        # Framework SMILES
-        self.framework_label = tk.Label(self.root, text="Framework SMILES:")
-        self.framework_label.grid(row=1, column=0)
-        self.framework_entry = tk.Entry(self.root)
-        self.framework_entry.grid(row=1, column=1)
-        self.framework_check_button = tk.Button(
-            self.root, text="Check", command=self.check_framework
+        # Parse SMILES
+        self.parse_smiles_label = tk.Label(self.root, text="Parse SMILES:")
+        self.parse_smiles_label.grid(row=1, column=0)
+        self.parse_smiles_entry = tk.Entry(self.root)
+        self.parse_smiles_entry.grid(row=1, column=1)
+        self.parse_smiles_check_button = tk.Button(
+            self.root, text="Check", command=self.check_smiles
         )
-        self.framework_check_button.grid(row=1, column=2)
-        self.framework_clear_button = tk.Button(
-            self.root, text="Clear", command=self.clear_framework
+        self.parse_smiles_check_button.grid(row=1, column=2)
+        self.parse_smiles_clear_button = tk.Button(
+            self.root, text="Clear", command=self.clear_all
         )
-        self.framework_clear_button.grid(row=1, column=3)
+        self.parse_smiles_clear_button.grid(row=1, column=3)
+        self.parse_smiles_image_label = tk.Label(self.root)
+        self.parse_smiles_image_label.grid(row=2, column=0, columnspan=3)
+        self._update_image("", self.parse_smiles_image_label)
 
-        # Molecule selection
-        self.molecule_label = tk.Label(self.root, text="Select Molecule:")
-        self.molecule_label.grid(row=1, column=4)
-        self.molecule_combobox = ttk.Combobox(self.root, state="readonly")
-        self.molecule_combobox.grid(row=1, column=5)
-        self.molecule_combobox.bind("<<ComboboxSelected>>", self.display_molecule)
-        self.molecule_select_button = tk.Button(
-            self.root, text="Select", command=self.select_molecule
+        # Retrieve frameworks
+        self.retrieve_frameworks_label = tk.Label(
+            self.root, text="Retrieve Frameworks:"
         )
-        self.molecule_select_button.grid(row=1, column=6)
+        self.retrieve_frameworks_label.grid(row=1, column=4)
+        self.retrieve_frameworks_combobox = ttk.Combobox(self.root, state="readonly")
+        self.retrieve_frameworks_combobox.grid(row=1, column=5)
+        self.retrieve_frameworks_combobox.bind(
+            "<<ComboboxSelected>>", self._display_framework
+        )
+        self.retrieve_frameworks_search_button = tk.Button(
+            self.root, text="Search", command=self.search_frameworks
+        )
+        self.retrieve_frameworks_search_button.grid(row=1, column=6)
+        self.retrieve_frameworks_submit_button = tk.Button(
+            self.root, text="Submit", command=self.submit_framework
+        )
+        self.retrieve_frameworks_submit_button.grid(row=1, column=7)
+        self.retrieve_frameworks_image_label = tk.Label(self.root)
+        self.retrieve_frameworks_image_label.grid(row=2, column=4, columnspan=3)
+        self._update_image("", self.retrieve_frameworks_image_label)
 
-        # View selection
-        self.view_label = tk.Label(self.root, text="View Selection:")
-        self.view_label.grid(row=3, column=0)
-        self.view_combobox = ttk.Combobox(self.root, state="readonly")
-        self.view_combobox.grid(row=3, column=1)
-        self.view_combobox.bind("<<ComboboxSelected>>", self.display_selection)
-        self.molecule_deselect_button = tk.Button(
+        # Choose molecule
+        self.choose_molecule_label = tk.Label(self.root, text="Choose Molecule:")
+        self.choose_molecule_label.grid(row=3, column=0)
+        self.choose_molecule_combobox = ttk.Combobox(self.root, state="readonly")
+        self.choose_molecule_combobox.grid(row=3, column=1)
+        self.choose_molecule_combobox.bind(
+            "<<ComboboxSelected>>", self._display_molecule
+        )
+        self.choose_molecule_confirm_button = tk.Button(
+            self.root, text="Confirm", command=self.confirm_molecule
+        )
+        self.choose_molecule_confirm_button.grid(row=3, column=2)
+        self.choose_molecule_image_label = tk.Label(self.root)
+        self.choose_molecule_image_label.grid(row=4, column=0, columnspan=3)
+        self._update_image("", self.choose_molecule_image_label)
+
+        # Review selections
+        self.review_selections_label = tk.Label(self.root, text="Review Selections:")
+        self.review_selections_label.grid(row=3, column=4)
+        self.review_selections_combobox = ttk.Combobox(self.root, state="readonly")
+        self.review_selections_combobox.grid(row=3, column=5)
+        self.review_selections_combobox.bind(
+            "<<ComboboxSelected>>", self._display_selection
+        )
+        self.review_selections_remove_button = tk.Button(
             self.root, text="Remove", command=self.remove_selection
         )
-        self.molecule_deselect_button.grid(row=3, column=2)
-
-        # Image areas
-        self.framework_image_label = tk.Label(self.root, text="Framework")
-        self.framework_image_label.grid(row=2, column=0, columnspan=3)
-        self._clear_image(self.framework_image_label)
-        self.molecule_image_label = tk.Label(self.root, text="Molecule")
-        self.molecule_image_label.grid(row=2, column=4, columnspan=3)
-        self._clear_image(self.molecule_image_label)
-        self.selection_image_label = tk.Label(self.root, text="Selection")
-        self.selection_image_label.grid(row=4, column=0, columnspan=3)
-        self._clear_image(self.selection_image_label)
+        self.review_selections_remove_button.grid(row=3, column=6)
+        self.review_selections_image_label = tk.Label(self.root)
+        self.review_selections_image_label.grid(row=4, column=4, columnspan=3)
+        self._update_image("", self.review_selections_image_label)
 
         # Save analogues
-        self.save_label = tk.Label(self.root, text="Output Analogues Path:")
-        self.save_label.grid(row=3, column=4)
-        self.save_entry = tk.Entry(self.root)
-        self.save_entry.grid(row=3, column=5)
-        self.analogues_browse_button = tk.Button(
+        self.save_analogues_label = tk.Label(self.root, text="Output Analogues Path:")
+        self.save_analogues_label.grid(row=0, column=4)
+        self.save_analogues_entry = tk.Entry(self.root)
+        self.save_analogues_entry.grid(row=0, column=5)
+        self.save_analogues_browse_button = tk.Button(
             self.root, text="Browse", command=self.browse_output
         )
-        self.analogues_browse_button.grid(row=3, column=6)
-        self.analogues_save_button = tk.Button(
+        self.save_analogues_browse_button.grid(row=0, column=6)
+        self.save_analogues_save_button = tk.Button(
             self.root, text="Save", command=self.save_analogues
         )
-        self.analogues_save_button.grid(row=3, column=7)
+        self.save_analogues_save_button.grid(row=0, column=7)
 
-    def _update_combobox(self, titles: list[str], combobox: ttk.Combobox):
-        combobox["values"] = titles
+    def _clear_parse_smiles(self):
+        self.parse_smiles_entry.delete(0, tk.END)
+        self._update_image("", self.parse_smiles_image_label)
 
-    def _clear_combobox(self, combobox: ttk.Combobox, *, clear: bool = False):
-        combobox.set("")
-        if clear:
-            combobox["values"] = []
+    def _clear_retrieve_frameworks(self):
+        self.retrieve_frameworks_combobox.set("")
+        self.retrieve_frameworks_combobox["values"] = []
+        self.current_framework = ""
+        self._update_image("", self.retrieve_frameworks_image_label)
 
-    def _update_image(self, smiles, label, *, pattern: Chem.rdchem.Mol | None = None):
+    def _clear_choose_molecule(self):
+        self.choose_molecule_combobox.set("")
+        self.choose_molecule_combobox["values"] = []
+        self._update_image("", self.choose_molecule_image_label)
+
+    def _clear_review_selections(self):
+        self.review_selections_combobox.set("")
+        self.review_selections_combobox["values"] = []
+        self._update_image("", self.review_selections_image_label)
+
+    def _display_framework(self, event: tk.Event):
+        framework_smiles = self.retrieve_frameworks_combobox.get()
+        self._update_image(framework_smiles, self.retrieve_frameworks_image_label)
+
+    def _display_molecule(self, event: tk.Event):
+        molecule_title = self.choose_molecule_combobox.get()
+        molecule_smiles = str(self.client.library.loc[molecule_title, "smiles"])
+        self._update_image(
+            molecule_smiles,
+            self.choose_molecule_image_label,
+            pattern_smiles=self.current_framework,
+        )
+
+    def _display_selection(self, event: tk.Event):
+        selected_title = self.review_selections_combobox.get()
+        selected_smiles = str(self.client.library.loc[selected_title, "smiles"])
+        self._update_image(selected_smiles, self.review_selections_image_label)
+
+    def _update_image(self, smiles: str, label: tk.Label, *, pattern_smiles: str = ""):
         try:
             mol = Chem.MolFromSmiles(smiles)
-            img = draw_mol(mol, pattern=pattern)
+            pattern = Chem.MolFromSmiles(pattern_smiles) if pattern_smiles else None
+            img = draw_mol(mol, pattern=pattern, alpha=0.25, if_highlight_atoms=False)
         except ValueError:
             messagebox.showerror("Error", "Invalid SMILES")
         except RuntimeError:
@@ -216,9 +286,6 @@ class AnalogueGUI:
             photo = ImageTk.PhotoImage(img)
             label.config(image=photo)
             label.image = photo
-
-    def _clear_image(self, label):
-        self._update_image("", label)
 
     def browse_input(self):
         input_path = filedialog.askopenfilename(
@@ -231,54 +298,58 @@ class AnalogueGUI:
                 ("All Files", "*.*"),
             ],
         )
-        self.load_entry.delete(0, tk.END)
-        self.load_entry.insert(0, input_path)
+        self.load_library_entry.delete(0, tk.END)
+        self.load_library_entry.insert(0, input_path)
         self.load_library()
 
     def load_library(self):
-        input_path = self.load_entry.get()
+        input_path = self.load_library_entry.get()
         self.client.load_library(input_path)
+        self.clear_all()
 
-    def check_framework(self):
-        framework_smiles = self.framework_entry.get()
-        framework_smiles = self.client.check_framework(framework_smiles)
-        self._update_image(framework_smiles, self.framework_image_label)
-        titles = self.client.extract_molecules(framework_smiles)
-        self._update_combobox(titles, self.molecule_combobox)
-        self._clear_image(self.molecule_image_label)
-        self._clear_combobox(self.molecule_combobox)
+    def check_smiles(self):
+        smiles = self.parse_smiles_entry.get()
+        smiles = self.client.check_smiles(smiles)
+        self._clear_choose_molecule()
+        self._clear_retrieve_frameworks()
+        self._update_image(smiles, self.parse_smiles_image_label)
+        if smiles:
+            framework_smiles = MurckoScaffold.MurckoScaffoldSmilesFromSmiles(smiles)
+            if (
+                framework_smiles
+                not in self.client.frameworks["cluster_framework"].values
+            ):
+                messagebox.showwarning("Warning", "Framework not found in the library")
+            self.retrieve_frameworks_combobox["values"] = [framework_smiles]
 
-    def clear_framework(self):
-        self.framework_entry.delete(0, tk.END)
-        self._clear_image(self.framework_image_label)
-        self._clear_image(self.molecule_image_label)
-        self._clear_combobox(self.molecule_combobox, clear=True)
+    def clear_all(self):
+        self._clear_choose_molecule()
+        self._clear_retrieve_frameworks()
+        self._clear_parse_smiles()
 
-    def display_molecule(self, event: tk.Event):
-        molecule_title = self.molecule_combobox.get()
-        molecule_smiles = self.client.title2smiles(molecule_title)
-        self._update_image(
-            molecule_smiles,
-            self.molecule_image_label,
-            pattern=Chem.MolFromSmiles(self.client.current_framework),
-        )
+    def search_frameworks(self):
+        framework_smiles = self.retrieve_frameworks_combobox.get()
+        frameworks = self.client.search_frameworks(framework_smiles)
+        self._clear_choose_molecule()
+        self._clear_retrieve_frameworks()
+        self.retrieve_frameworks_combobox["values"] = frameworks
 
-    def display_selection(self, event: tk.Event):
-        selected_title = self.view_combobox.get()
-        selected_smiles = self.client.title2smiles(selected_title)
-        self._update_image(selected_smiles, self.selection_image_label)
+    def submit_framework(self):
+        self.current_framework = self.retrieve_frameworks_combobox.get()
+        molecules = self.client.extract_molecules(self.current_framework)
+        self._clear_choose_molecule()
+        self.choose_molecule_combobox["values"] = molecules
 
-    def select_molecule(self):
-        selected_molecule = self.molecule_combobox.get()
+    def confirm_molecule(self):
+        selected_molecule = self.choose_molecule_combobox.get()
         self.client.select_molecule(selected_molecule)
-        self._update_combobox(list(self.client.selected_molecules), self.view_combobox)
+        self.review_selections_combobox["values"] = list(self.client.selected_molecules)
 
     def remove_selection(self):
-        removed_selection = self.view_combobox.get()
+        removed_selection = self.review_selections_combobox.get()
         self.client.remove_selection(removed_selection)
-        self._update_combobox(list(self.client.selected_molecules), self.view_combobox)
-        self._clear_image(self.selection_image_label)
-        self._clear_combobox(self.view_combobox)
+        self._clear_review_selections()
+        self.review_selections_combobox["values"] = list(self.client.selected_molecules)
 
     def browse_output(self):
         output_path = filedialog.asksaveasfilename(
@@ -287,12 +358,12 @@ class AnalogueGUI:
             title="Save Analogues",
             filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
         )
-        self.save_entry.delete(0, tk.END)
-        self.save_entry.insert(0, output_path)
+        self.save_analogues_entry.delete(0, tk.END)
+        self.save_analogues_entry.insert(0, output_path)
         self.save_analogues()
 
     def save_analogues(self):
-        output_path = self.save_entry.get()
+        output_path = self.save_analogues_entry.get()
         self.client.save_analogues(output_path)
 
 

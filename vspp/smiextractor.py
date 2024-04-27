@@ -7,19 +7,16 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-from pandarallel import pandarallel
 from rdkit import Chem
 
 from vspp._utils import calc_bulk_sim, gen_fp
-
-pandarallel.initialize(progress_bar=True)
 
 
 def extract_query(
     df: pd.DataFrame,
     query: Chem.rdchem.Mol,
-    smi_col: str = "smiles",
     *,
+    smi_col: str = "smiles",
     cutoff: float = 0.8,
     upper_cutoff: float = 1.0,
     fp_type: str = "topological_torsion",
@@ -73,9 +70,9 @@ def extract_query(
     if df_copy.empty:
         warn("No structures passed the similarity cutoff.")
 
-    df_copy = df_copy.sort_values(
-        by=["similarity", "title"], ascending=[False, True]
-    ).reset_index(drop=True)
+    df_copy = df_copy.sort_values(by="similarity", ascending=False).reset_index(
+        drop=True
+    )
 
     logging.info("Similar structures are successfully extracted.")
 
@@ -85,6 +82,7 @@ def extract_query(
 def extract_pattern(
     df: pd.DataFrame,
     pattern: Chem.rdchem.Mol,
+    *,
     smi_col: str = "smiles",
 ) -> None:
     """Extract match structures
@@ -116,8 +114,6 @@ def extract_pattern(
 
     if df_copy.empty:
         warn("No structures are matched.")
-
-    df_copy = df_copy.sort_values(by="title").reset_index(drop=True)
 
     return df_copy
 

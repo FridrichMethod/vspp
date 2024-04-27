@@ -38,6 +38,23 @@ SIM_FUNCS: dict[
     Callable[[FingerPrint, FingerPrint], float],
 ] = {name.lower(): func for name, func, _ in DataStructs.similarityFunctions}
 
+BULK_SIM_FUNCS: dict[
+    str,
+    Callable[[FingerPrint, Sequence[FingerPrint]], list[float]],
+] = {
+    "tanimoto": DataStructs.cDataStructs.BulkTanimotoSimilarity,
+    "dice": DataStructs.cDataStructs.BulkDiceSimilarity,
+    "cosine": DataStructs.cDataStructs.BulkCosineSimilarity,
+    "sokal": DataStructs.cDataStructs.BulkSokalSimilarity,
+    "russel": DataStructs.cDataStructs.BulkRusselSimilarity,
+    "rogotgoldberg": DataStructs.cDataStructs.BulkRogotGoldbergSimilarity,
+    "allbit": DataStructs.cDataStructs.BulkAllBitSimilarity,
+    "kulczynski": DataStructs.cDataStructs.BulkKulczynskiSimilarity,
+    "mcconnaughey": DataStructs.cDataStructs.BulkMcConnaugheySimilarity,
+    "asymmetric": DataStructs.cDataStructs.BulkAsymmetricSimilarity,
+    "braunblanquet": DataStructs.cDataStructs.BulkBraunBlanquetSimilarity,
+}
+
 
 class MolSupplier:
     """Read and yield molecules from a file
@@ -170,33 +187,12 @@ def calc_bulk_sim(
         Similarities between the fingerprint and a list of fingerprints
     """
 
-    match similarity_metric:
-        case "tanimoto":
-            return DataStructs.cDataStructs.BulkTanimotoSimilarity(fp, fps)
-        case "dice":
-            return DataStructs.cDataStructs.BulkDiceSimilarity(fp, fps)
-        case "cosine":
-            return DataStructs.cDataStructs.BulkCosineSimilarity(fp, fps)
-        case "sokal":
-            return DataStructs.cDataStructs.BulkSokalSimilarity(fp, fps)
-        case "russel":
-            return DataStructs.cDataStructs.BulkRusselSimilarity(fp, fps)
-        case "rogotgoldberg":
-            return DataStructs.cDataStructs.BulkRogotGoldbergSimilarity(fp, fps)
-        case "allbit":
-            return DataStructs.cDataStructs.BulkAllBitSimilarity(fp, fps)
-        case "kulczynski":
-            return DataStructs.cDataStructs.BulkKulczynskiSimilarity(fp, fps)
-        case "mcconnaughey":
-            return DataStructs.cDataStructs.BulkMcConnaugheySimilarity(fp, fps)
-        case "asymmetric":
-            return DataStructs.cDataStructs.BulkAsymmetricSimilarity(fp, fps)
-        case "braunblanquet":
-            return DataStructs.cDataStructs.BulkBraunBlanquetSimilarity(fp, fps)
-        case _:
-            raise ValueError(
-                "similarity_metric should be one of 'tanimoto', 'dice', 'cosine', 'sokal', 'russel', 'rogotgoldberg', 'allbit', 'kulczynski', 'mcconnaughey', 'asymmetric', 'braunblanquet'."
-            )
+    if similarity_metric not in BULK_SIM_FUNCS:
+        raise ValueError(
+            "similarity_metric should be one of 'tanimoto', 'dice', 'cosine', 'sokal', 'russel', 'rogotgoldberg', 'allbit', 'kulczynski', 'mcconnaughey', 'asymmetric', 'braunblanquet'."
+        )
+
+    return BULK_SIM_FUNCS[similarity_metric](fp, fps)
 
 
 def calc_descs(
@@ -352,6 +348,8 @@ def draw_mol(
     *,
     pattern: Chem.rdchem.Mol | None = None,
     img_size: tuple[float, float] = (300, 300),
+    if_highlight_atoms: bool = True,
+    alpha: float = 0.5,
 ) -> Image.Image | None:
     """Draw molecules
 
@@ -363,6 +361,10 @@ def draw_mol(
         SMARTS pattern to align and highlight the substructure, by default None
     img_size : tuple[float, float], optional
         Size of the image, by default (600, 600)
+    if_highlight_atoms : bool, optional
+        Whether to highlight the atoms, by default True
+    alpha : float, optional
+        Transparency of the highlight color, by default 0.5
 
     Returns
     -------
@@ -395,8 +397,9 @@ def draw_mol(
     return Draw.MolToImage(  # type: ignore
         mol,
         size=img_size,
-        highlightAtoms=highlight_atoms,
+        highlightAtoms=highlight_atoms if if_highlight_atoms else [],
         highlightBonds=highlight_bonds,
+        highlightColor=(1, 0, 0, alpha),
     )
 
 

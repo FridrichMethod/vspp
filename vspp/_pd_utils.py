@@ -6,14 +6,11 @@ from warnings import warn
 
 import numpy as np
 import pandas as pd
-from pandarallel import pandarallel
 from rdkit import Chem
 from rdkit.Chem import PandasTools
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
 from vspp._utils import calc_descs, cluster_fps, gen_fp, is_pains
-
-pandarallel.initialize(progress_bar=True)
 
 
 def smi2df(
@@ -79,8 +76,8 @@ def smi2df(
 
 def cluster_df_fps(
     df: pd.DataFrame,
-    smi_col: str = "smiles",
     *,
+    smi_col: str = "smiles",
     cutoff: float = 0.6,
     fp_type: str = "morgan",
     similarity_metric: str = "tanimoto",
@@ -133,13 +130,14 @@ def cluster_df_fps(
         )
     )
 
-    df_copy = df_copy.sort_values(by=["cluster_id", "title"]).reset_index(drop=True)
+    df_copy = df_copy.sort_values(by="cluster_id").reset_index(drop=True)
 
     return df_copy
 
 
 def cluster_df_frameworks(
     df: pd.DataFrame,
+    *,
     smi_col: str = "smiles",
 ) -> pd.DataFrame:
     """Cluster frameworks
@@ -284,8 +282,8 @@ def gen_df_info(
 def write_df(
     df: pd.DataFrame,
     output_file: str,
-    smi_col: str = "smiles",
     *,
+    smi_col: str = "smiles",
     image_size: tuple = (300, 300),
 ) -> None:
     """Write the output files and draw structures
