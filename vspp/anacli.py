@@ -49,12 +49,26 @@ class AnalogueClient:
             messagebox.showerror("Error", "Invalid file format")
 
     def check_smiles(self, smiles: str) -> str:
-        if not smiles:
+        if self.library.empty:
+            messagebox.showerror("Error", "Library not loaded")
+        elif not smiles:
             messagebox.showerror("Error", "No SMILES provided")
         elif (query := Chem.MolFromSmiles(smiles)) is None:
             messagebox.showerror("Error", "Invalid SMILES")
         else:
             return Chem.MolToSmiles(query)
+        return ""
+
+    def fetch_framework(self, smiles: str) -> str:
+        if self.frameworks.empty:
+            messagebox.showerror("Error", "Frameworks not generated")
+        elif smiles:
+            framework_smiles = MurckoScaffold.MurckoScaffoldSmilesFromSmiles(smiles)
+            if framework_smiles not in self.frameworks["cluster_framework"].values:
+                messagebox.showwarning("Warning", "Framework not found in the library")
+            return framework_smiles  # type: ignore
+        else:
+            assert False
         return ""
 
     def search_frameworks(self, framework_smiles: str) -> list[str]:
@@ -257,11 +271,11 @@ class AnalogueGUI:
         self.review_selections_combobox["values"] = []
         self._update_image("", self.review_selections_image_label)
 
-    def _display_framework(self, event: tk.Event):
+    def _display_framework(self, event: tk.Event | None = None):
         framework_smiles = self.retrieve_frameworks_combobox.get()
         self._update_image(framework_smiles, self.retrieve_frameworks_image_label)
 
-    def _display_molecule(self, event: tk.Event):
+    def _display_molecule(self, event: tk.Event | None = None):
         molecule_title = self.choose_molecule_combobox.get()
         molecule_smiles = str(self.client.library.loc[molecule_title, "smiles"])
         self._update_image(
@@ -270,7 +284,7 @@ class AnalogueGUI:
             pattern_smiles=self.current_framework,
         )
 
-    def _display_selection(self, event: tk.Event):
+    def _display_selection(self, event: tk.Event | None = None):
         selected_title = self.review_selections_combobox.get()
         selected_smiles = str(self.client.library.loc[selected_title, "smiles"])
         self._update_image(selected_smiles, self.review_selections_image_label)
@@ -315,14 +329,10 @@ class AnalogueGUI:
         self._clear_choose_molecule()
         self._clear_retrieve_frameworks()
         self._update_image(smiles, self.parse_smiles_image_label)
-        if smiles:
-            framework_smiles = MurckoScaffold.MurckoScaffoldSmilesFromSmiles(smiles)
-            if (
-                framework_smiles
-                not in self.client.frameworks["cluster_framework"].values
-            ):
-                messagebox.showwarning("Warning", "Framework not found in the library")
+        if framework_smiles := self.client.fetch_framework(smiles):
             self.retrieve_frameworks_combobox["values"] = [framework_smiles]
+            self.retrieve_frameworks_combobox.set(framework_smiles)
+            self._display_framework()
 
     def clear_all(self):
         self._clear_choose_molecule()
@@ -341,11 +351,16 @@ class AnalogueGUI:
         molecules = self.client.extract_molecules(self.current_framework)
         self._clear_choose_molecule()
         self.choose_molecule_combobox["values"] = molecules
+        if molecules:
+            self.choose_molecule_combobox.set(molecules[0])
+            self._display_molecule()
 
     def confirm_molecule(self):
         selected_molecule = self.choose_molecule_combobox.get()
         self.client.select_molecule(selected_molecule)
         self.review_selections_combobox["values"] = list(self.client.selected_molecules)
+        self.review_selections_combobox.set(selected_molecule)
+        self._display_selection()
 
     def remove_selection(self):
         removed_selection = self.review_selections_combobox.get()
