@@ -66,7 +66,7 @@ class AnalogueClient:
             self.frameworks,
             Chem.MolFromSmiles(framework_smiles),
             smi_col="cluster_framework",
-            cutoff=0.8,
+            cutoff=0.6,
         )["cluster_framework"].to_list():
             messagebox.showinfo(
                 "Success",
@@ -131,6 +131,8 @@ class AnalogueClient:
 
 class AnalogueGUI:
     def __init__(self, root: tk.Tk, client: AnalogueClient):
+        # TODO: Add `Copy` and `Next` buttons
+
         self.root: tk.Tk = root
         self.client: AnalogueClient = client
         self.current_framework: str = ""
