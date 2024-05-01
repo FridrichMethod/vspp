@@ -17,7 +17,14 @@ class AnalogueClient:
     def __init__(self) -> None:
         self.library: pd.DataFrame = pd.DataFrame()
         self.frameworks: pd.DataFrame = pd.DataFrame()
-        self.selected_molecules: set[str] = set()
+        self.selected_molecules: dict[str, None] = {}
+
+    def title2smiles(self, title: str) -> str:
+        if self.library.empty:
+            pass
+        elif title in self.library.index:
+            return str(self.library.loc[title, "smiles"])
+        return ""
 
     def load_library(self, input_path: str) -> None:
         if not input_path:
@@ -67,8 +74,6 @@ class AnalogueClient:
             if framework_smiles not in self.frameworks["cluster_framework"].values:
                 messagebox.showwarning("Warning", "Framework not found in the library")
             return framework_smiles  # type: ignore
-        else:
-            assert False
         return ""
 
     def search_frameworks(self, framework_smiles: str) -> list[str]:
@@ -110,7 +115,7 @@ class AnalogueClient:
         if self.library.empty:
             messagebox.showerror("Error", "Library not loaded")
         elif molecule_title in self.library.index:
-            self.selected_molecules.add(molecule_title)
+            self.selected_molecules[molecule_title] = None
         else:
             messagebox.showerror("Error", "Molecule not found")
 
@@ -118,17 +123,17 @@ class AnalogueClient:
         if not self.selected_molecules:
             messagebox.showerror("Error", "No molecules selected")
         elif molecule_title in self.selected_molecules:
-            self.selected_molecules.remove(molecule_title)
+            self.selected_molecules.pop(molecule_title, None)
         else:
             messagebox.showerror("Error", "Molecule not selected")
 
     def save_analogues(self, output_path: str) -> None:
-        if self.library.empty:
+        if not output_path:
+            pass
+        elif self.library.empty:
             messagebox.showerror("Error", "Library not loaded")
         elif not self.selected_molecules:
             messagebox.showerror("Error", "No molecules selected")
-        elif not output_path:
-            pass
         elif not output_path.endswith(".csv"):
             messagebox.showerror("Error", "Invalid file format")
         else:
@@ -145,7 +150,6 @@ class AnalogueClient:
 
 class AnalogueGUI:
     def __init__(self, root: tk.Tk, client: AnalogueClient):
-        # TODO: Add `Copy` and `Next` buttons
 
         self.root: tk.Tk = root
         self.client: AnalogueClient = client
@@ -179,6 +183,10 @@ class AnalogueGUI:
             self.root, text="Clear", command=self.clear_all
         )
         self.parse_smiles_clear_button.grid(row=1, column=3)
+        self.parse_smiles_copy_button = tk.Button(
+            self.root, text="Copy", command=self.copy_parse_smiles
+        )
+        self.parse_smiles_copy_button.grid(row=2, column=3)
         self.parse_smiles_image_label = tk.Label(self.root)
         self.parse_smiles_image_label.grid(row=2, column=0, columnspan=3)
         self._update_image("", self.parse_smiles_image_label)
@@ -201,40 +209,82 @@ class AnalogueGUI:
             self.root, text="Submit", command=self.submit_framework
         )
         self.retrieve_frameworks_submit_button.grid(row=1, column=7)
+        self.retrieve_frameworks_copy_button = tk.Button(
+            self.root, text="Copy", command=self.copy_retrieve_frameworks
+        )
+        self.retrieve_frameworks_copy_button.grid(row=2, column=7)
+        self.retrieve_frameworks_previous_button = tk.Button(
+            self.root, text="Previous", command=self.go_previous_retrieve_frameworks
+        )
+        self.retrieve_frameworks_previous_button.grid(row=3, column=4)
+        self.retrieve_frameworks_next_button = tk.Button(
+            self.root, text="Next", command=self.go_next_retrieve_frameworks
+        )
+        self.retrieve_frameworks_next_button.grid(row=3, column=6)
+        self.retrieve_frameworks_index_label = tk.Label(self.root, text="0/0")
+        self.retrieve_frameworks_index_label.grid(row=3, column=5)
         self.retrieve_frameworks_image_label = tk.Label(self.root)
         self.retrieve_frameworks_image_label.grid(row=2, column=4, columnspan=3)
         self._update_image("", self.retrieve_frameworks_image_label)
 
         # Choose molecule
         self.choose_molecule_label = tk.Label(self.root, text="Choose Molecule:")
-        self.choose_molecule_label.grid(row=3, column=0)
+        self.choose_molecule_label.grid(row=4, column=0)
         self.choose_molecule_combobox = ttk.Combobox(self.root, state="readonly")
-        self.choose_molecule_combobox.grid(row=3, column=1)
+        self.choose_molecule_combobox.grid(row=4, column=1)
         self.choose_molecule_combobox.bind(
             "<<ComboboxSelected>>", self._display_molecule
         )
         self.choose_molecule_confirm_button = tk.Button(
             self.root, text="Confirm", command=self.confirm_molecule
         )
-        self.choose_molecule_confirm_button.grid(row=3, column=2)
+        self.choose_molecule_confirm_button.grid(row=4, column=2)
+        self.choose_molecule_copy_button = tk.Button(
+            self.root, text="Copy", command=self.copy_choose_molecule
+        )
+        self.choose_molecule_copy_button.grid(row=5, column=3)
+        self.choose_molecule_previous_button = tk.Button(
+            self.root, text="Previous", command=self.go_previous_choose_molecule
+        )
+        self.choose_molecule_previous_button.grid(row=6, column=0)
+        self.choose_molecule_next_button = tk.Button(
+            self.root, text="Next", command=self.go_next_choose_molecule
+        )
+        self.choose_molecule_next_button.grid(row=6, column=2)
+        self.choose_molecule_index_label = tk.Label(self.root, text="0/0")
+        self.choose_molecule_index_label.grid(row=6, column=1)
         self.choose_molecule_image_label = tk.Label(self.root)
-        self.choose_molecule_image_label.grid(row=4, column=0, columnspan=3)
+        self.choose_molecule_image_label.grid(row=5, column=0, columnspan=3)
         self._update_image("", self.choose_molecule_image_label)
 
         # Review selections
         self.review_selections_label = tk.Label(self.root, text="Review Selections:")
-        self.review_selections_label.grid(row=3, column=4)
+        self.review_selections_label.grid(row=4, column=4)
         self.review_selections_combobox = ttk.Combobox(self.root, state="readonly")
-        self.review_selections_combobox.grid(row=3, column=5)
+        self.review_selections_combobox.grid(row=4, column=5)
         self.review_selections_combobox.bind(
             "<<ComboboxSelected>>", self._display_selection
         )
         self.review_selections_remove_button = tk.Button(
             self.root, text="Remove", command=self.remove_selection
         )
-        self.review_selections_remove_button.grid(row=3, column=6)
+        self.review_selections_remove_button.grid(row=4, column=6)
+        self.review_selections_copy_button = tk.Button(
+            self.root, text="Copy", command=self.copy_review_selections
+        )
+        self.review_selections_copy_button.grid(row=5, column=7)
+        self.review_selections_previous_button = tk.Button(
+            self.root, text="Previous", command=self.go_previous_review_selections
+        )
+        self.review_selections_previous_button.grid(row=6, column=4)
+        self.review_selections_next_button = tk.Button(
+            self.root, text="Next", command=self.go_next_review_selections
+        )
+        self.review_selections_next_button.grid(row=6, column=6)
+        self.review_selections_index_label = tk.Label(self.root, text="0/0")
+        self.review_selections_index_label.grid(row=6, column=5)
         self.review_selections_image_label = tk.Label(self.root)
-        self.review_selections_image_label.grid(row=4, column=4, columnspan=3)
+        self.review_selections_image_label.grid(row=5, column=4, columnspan=3)
         self._update_image("", self.review_selections_image_label)
 
         # Save analogues
@@ -251,6 +301,36 @@ class AnalogueGUI:
         )
         self.save_analogues_save_button.grid(row=0, column=7)
 
+    def _copy_to_clipboard(self, smiles: str):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(smiles)
+        self.root.update()
+
+    def copy_parse_smiles(self):
+        smiles = self.parse_smiles_entry.get()
+        if smiles := self.client.check_smiles(smiles):
+            self._copy_to_clipboard(smiles)
+
+    def copy_retrieve_frameworks(self):
+        if framework_smiles := self.retrieve_frameworks_combobox.get():
+            self._copy_to_clipboard(framework_smiles)
+        else:
+            messagebox.showerror("Error", "No framework provided")
+
+    def copy_choose_molecule(self):
+        if molecule_title := self.choose_molecule_combobox.get():
+            molecule_smiles = self.client.title2smiles(molecule_title)
+            self._copy_to_clipboard(molecule_smiles)
+        else:
+            messagebox.showerror("Error", "No molecule provided")
+
+    def copy_review_selections(self):
+        if selected_title := self.review_selections_combobox.get():
+            selected_smiles = self.client.title2smiles(selected_title)
+            self._copy_to_clipboard(selected_smiles)
+        else:
+            messagebox.showerror("Error", "No selection provided")
+
     def _clear_parse_smiles(self):
         self.parse_smiles_entry.delete(0, tk.END)
         self._update_image("", self.parse_smiles_image_label)
@@ -259,40 +339,85 @@ class AnalogueGUI:
         self.retrieve_frameworks_combobox.set("")
         self.retrieve_frameworks_combobox["values"] = []
         self.current_framework = ""
-        self._update_image("", self.retrieve_frameworks_image_label)
+        self._display_framework()
 
     def _clear_choose_molecule(self):
         self.choose_molecule_combobox.set("")
         self.choose_molecule_combobox["values"] = []
-        self._update_image("", self.choose_molecule_image_label)
+        self._display_molecule()
 
     def _clear_review_selections(self):
         self.review_selections_combobox.set("")
         self.review_selections_combobox["values"] = []
-        self._update_image("", self.review_selections_image_label)
+        self._display_selection()
 
     def _display_framework(self, event: tk.Event | None = None):
         framework_smiles = self.retrieve_frameworks_combobox.get()
         self._update_image(framework_smiles, self.retrieve_frameworks_image_label)
+        self._update_index_label(
+            self.retrieve_frameworks_combobox, self.retrieve_frameworks_index_label
+        )
 
     def _display_molecule(self, event: tk.Event | None = None):
         molecule_title = self.choose_molecule_combobox.get()
-        molecule_smiles = str(self.client.library.loc[molecule_title, "smiles"])
+        molecule_smiles = self.client.title2smiles(molecule_title)
         self._update_image(
             molecule_smiles,
             self.choose_molecule_image_label,
             pattern_smiles=self.current_framework,
         )
+        self._update_index_label(
+            self.choose_molecule_combobox, self.choose_molecule_index_label
+        )
 
     def _display_selection(self, event: tk.Event | None = None):
         selected_title = self.review_selections_combobox.get()
-        selected_smiles = str(self.client.library.loc[selected_title, "smiles"])
+        selected_smiles = self.client.title2smiles(selected_title)
         self._update_image(selected_smiles, self.review_selections_image_label)
+        self._update_index_label(
+            self.review_selections_combobox, self.review_selections_index_label
+        )
+
+    def _go_previous(self, combobox: ttk.Combobox):
+        if combobox["values"]:
+            combobox.current((combobox.current() - 1) % len(combobox["values"]))
+
+    def _go_next(self, combobox: ttk.Combobox):
+        if combobox["values"]:
+            combobox.current((combobox.current() + 1) % len(combobox["values"]))
+
+    def go_previous_retrieve_frameworks(self):
+        self._go_previous(self.retrieve_frameworks_combobox)
+        self._display_framework()
+
+    def go_next_retrieve_frameworks(self):
+        self._go_next(self.retrieve_frameworks_combobox)
+        self._display_framework()
+
+    def go_previous_choose_molecule(self):
+        self._go_previous(self.choose_molecule_combobox)
+        self._display_molecule()
+
+    def go_next_choose_molecule(self):
+        self._go_next(self.choose_molecule_combobox)
+        self._display_molecule()
+
+    def go_previous_review_selections(self):
+        self._go_previous(self.review_selections_combobox)
+        self._display_selection()
+
+    def go_next_review_selections(self):
+        self._go_next(self.review_selections_combobox)
+        self._display_selection()
 
     def _update_image(self, smiles: str, label: tk.Label, *, pattern_smiles: str = ""):
         try:
             mol = Chem.MolFromSmiles(smiles)
-            pattern = Chem.MolFromSmiles(pattern_smiles) if pattern_smiles else None
+            pattern = (
+                Chem.MolFromSmiles(pattern_smiles)
+                if pattern_smiles and smiles
+                else None
+            )
             img = draw_mol(mol, pattern=pattern, alpha=0.25, if_highlight_atoms=False)
         except ValueError:
             messagebox.showerror("Error", "Invalid SMILES")
@@ -302,6 +427,9 @@ class AnalogueGUI:
             photo = ImageTk.PhotoImage(img)
             label.config(image=photo)
             label.image = photo
+
+    def _update_index_label(self, combobox: ttk.Combobox, label: tk.Label):
+        label.config(text=f"{combobox.current()+1}/{len(combobox['values'])}")
 
     def browse_input(self):
         input_path = filedialog.askopenfilename(
@@ -332,7 +460,7 @@ class AnalogueGUI:
         if framework_smiles := self.client.fetch_framework(smiles):
             self.retrieve_frameworks_combobox["values"] = [framework_smiles]
             self.retrieve_frameworks_combobox.set(framework_smiles)
-            self._display_framework()
+        self._display_framework()
 
     def clear_all(self):
         self._clear_choose_molecule()
@@ -345,15 +473,18 @@ class AnalogueGUI:
         self._clear_choose_molecule()
         self._clear_retrieve_frameworks()
         self.retrieve_frameworks_combobox["values"] = frameworks
+        self.retrieve_frameworks_combobox.set(
+            frameworks[0] if frameworks else framework_smiles
+        )
+        self._display_framework()
 
     def submit_framework(self):
         self.current_framework = self.retrieve_frameworks_combobox.get()
         molecules = self.client.extract_molecules(self.current_framework)
         self._clear_choose_molecule()
         self.choose_molecule_combobox["values"] = molecules
-        if molecules:
-            self.choose_molecule_combobox.set(molecules[0])
-            self._display_molecule()
+        self.choose_molecule_combobox.set(molecules[0] if molecules else "")
+        self._display_molecule()
 
     def confirm_molecule(self):
         selected_molecule = self.choose_molecule_combobox.get()
@@ -366,7 +497,10 @@ class AnalogueGUI:
         removed_selection = self.review_selections_combobox.get()
         self.client.remove_selection(removed_selection)
         self._clear_review_selections()
-        self.review_selections_combobox["values"] = list(self.client.selected_molecules)
+        selections = list(self.client.selected_molecules)
+        self.review_selections_combobox["values"] = selections
+        self.review_selections_combobox.set(selections[-1] if selections else "")
+        self._display_selection()
 
     def browse_output(self):
         output_path = filedialog.asksaveasfilename(
