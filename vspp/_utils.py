@@ -411,6 +411,8 @@ def draw_mols(
     pattern: Chem.rdchem.Mol | None = None,
     mols_per_row: int = 8,
     sub_img_size: tuple[float, float] = (300, 300),
+    if_highlight_atoms: bool = True,
+    alpha: float = 0.5,
 ) -> Image.Image | None:
     """Draw molecules
 
@@ -428,6 +430,10 @@ def draw_mols(
         Number of molecules per row, by default 10
     sub_img_size : tuple[float, float], optional
         Size of each sub-image, by default (600, 600)
+    if_highlight_atoms : bool, optional
+        Whether to highlight the atoms, by default True
+    alpha : float, optional
+        Transparency of the highlight color, by default 0.5
 
     Returns
     -------
@@ -471,8 +477,9 @@ def draw_mols(
             molsPerRow=mols_per_row,  # molsPerRow should not be too small
             subImgSize=sub_img_size,
             legends=legends,
-            highlightAtomLists=highlight_atom_lists,
+            highlightAtomLists=highlight_atom_lists if if_highlight_atoms else None,
             highlightBondLists=highlight_bond_lists,
+            highlightColor=(1, 0, 0, alpha),
             # returnPNG must be set EXPLICITLY to False
             # to avoid error in Jupyter Notebook
             returnPNG=False,
