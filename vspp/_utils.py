@@ -412,7 +412,8 @@ def draw_mols(
     mols_per_row: int = 8,
     sub_img_size: tuple[float, float] = (300, 300),
     if_highlight_atoms: bool = True,
-    alpha: float = 0.5,
+    # TODO: Add alpha to the function signature
+    # alpha: float = 0.5,
 ) -> Image.Image | None:
     """Draw molecules
 
@@ -479,7 +480,6 @@ def draw_mols(
             legends=legends,
             highlightAtomLists=highlight_atom_lists if if_highlight_atoms else None,
             highlightBondLists=highlight_bond_lists,
-            highlightColor=(1, 0, 0, alpha),
             # returnPNG must be set EXPLICITLY to False
             # to avoid error in Jupyter Notebook
             returnPNG=False,
