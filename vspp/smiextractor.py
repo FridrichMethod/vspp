@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 
-from vspp._utils import calc_bulk_sim, gen_fp
+from vspp.utils import calc_bulk_sim, gen_fp
 
 
 def extract_query(

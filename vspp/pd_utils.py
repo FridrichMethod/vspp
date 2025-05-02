@@ -10,7 +10,7 @@ from rdkit import Chem
 from rdkit.Chem import PandasTools
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from vspp._utils import calc_descs, cluster_fps, gen_fp, is_pains
+from vspp.utils import calc_descs, cluster_fps, gen_fp, is_pains
 
 
 def smi2df(

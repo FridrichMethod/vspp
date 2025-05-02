@@ -8,9 +8,9 @@ from PIL import Image, ImageTk
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from vspp._pd_utils import cluster_df_frameworks, gen_df_info, smi2df
-from vspp._utils import draw_mol
+from vspp.pd_utils import cluster_df_frameworks, gen_df_info, smi2df
 from vspp.smiextractor import extract_query
+from vspp.utils import draw_mol
 
 
 class AnalogueClient:

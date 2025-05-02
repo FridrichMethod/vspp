@@ -12,7 +12,7 @@ import nest_asyncio
 from rdkit import Chem
 from tqdm.auto import tqdm
 
-from vspp._utils import MolSupplier, filt_descs
+from vspp.utils import MolSupplier, filt_descs
 
 
 class SmiConverter:
