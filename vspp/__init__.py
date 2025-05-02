@@ -4,6 +4,10 @@ import os
 
 from pandarallel import pandarallel
 
+__version__ = "2.6.3"
+__author__ = "Zhaoyang Li"
+__email__ = "zhaoyangli@stanford.edu"
+
 # Set the number of threads for NumExpr
 os.environ["NUMEXPR_MAX_THREADS"] = str(mp.cpu_count() // 2)
 
