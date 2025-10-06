@@ -4,7 +4,7 @@ import os
 
 from pandarallel import pandarallel
 
-__version__ = "2.6.3"
+__version__ = "0.1.0"
 __author__ = "Zhaoyang Li"
 __email__ = "zhaoyangli@stanford.edu"
 

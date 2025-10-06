@@ -1,0 +1,4 @@
+#
+# Filter criteria
+#
+Molecular_weight                         > 1000 OR < 20

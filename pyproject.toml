@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vspp"
+license = { file = "LICENSE" }
+authors = [{ name = "Zhaoyang Li", email = "zhaoyangli@stanford.edu" }]
+dynamic = ["version"]
+description = "VSPP: A Python package for virtual screening pre- and post-processing"
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Required dependencies
+dependencies = [
+    "matplotlib",
+    "numba",
+    "numpy",
+    "pandarallel",
+    "pandas",
+    "py3dmol",
+    "rdkit",
+    "scipy",
+    "seaborn",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "pre-commit"]
+
+[tool.pytest.ini_options]
+addopts = "-v -s"
+testpaths = ["tests"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vspp.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vspp", "vspp.*"]
